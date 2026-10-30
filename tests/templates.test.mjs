@@ -101,6 +101,7 @@ test('no client material in templates, the init and task skills, the agents, the
     'evals/start-task-triggers', 'evals/start-task-small-negative', 'evals/grill-asks-on-decisions', 'evals/kickoff-triggers',
     'evals/gate-triggers', 'evals/ship-not-model-invoked', 'evals/review-triggers',
     'tests/fixtures/repos/npm-app', 'tests/fixtures/repos/flutter-app',
+    'skills/measure', 'scripts/measure', 'tests/fixtures/measure',
   ];
   const files = [];
   const walk = (d) => {
