@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -13,12 +15,13 @@ const bad = (stderr = 'boom') => ({ code: 1, stdout: '', stderr });
 const j = (v) => ok(JSON.stringify(v));
 
 /** gh stub: `issue` and `prs` are JSON values (or a runner result); records every call. */
-function ghStub({ me = 'me-dev', issue = { assignees: [], body: '' }, prs = [] } = {}) {
+function ghStub({ me = 'me-dev', issue = { assignees: [], body: '' }, prs = [], headPrs = [] } = {}) {
   const calls = [];
   const gh = (args) => {
     calls.push(args);
     if (args[0] === 'api') return typeof me === 'string' ? ok(`${me}\n`) : me;
     if (args[0] === 'issue') return issue.code === undefined ? j(issue) : issue;
+    if (args[0] === 'pr' && args.includes('--head')) return Array.isArray(headPrs) ? j(headPrs) : headPrs;
     if (args[0] === 'pr') return Array.isArray(prs) ? j(prs) : prs;
     return bad('unexpected');
   };
@@ -95,6 +98,34 @@ test('PR whose head equals the branch matches without a reference', async () => 
   const r = await run({ branch: 'feature/27-x', gh: ghStub({ prs }), git: gitStub() });
   assert.equal(r.verdict, 'taken');
   assert.equal(r.openPRs.length, 1);
+});
+
+test('taken: a PR found only by --head (no #27 in title/body, absent from search)', async () => {
+  const headPrs = [pr({ title: 'Quiet work', body: '', headRefName: 'feature/27-x' })];
+  const r = await run({ branch: 'feature/27-x', gh: ghStub({ headPrs }), git: gitStub() });
+  assert.equal(r.verdict, 'taken');
+  assert.deepEqual(r.openPRs, [{ number: 5, author: 'colleague', head: 'feature/27-x' }]);
+});
+
+test('--head query args, and the same PR from search and --head is listed once', async () => {
+  const same = pr({ title: 'Closes #27' });
+  const gh = ghStub({ prs: [same], headPrs: [same] });
+  const r = await run({ branch: 'feature/27-x', gh, git: gitStub() });
+  const head = gh.calls.find((a) => a[0] === 'pr' && a.includes('--head'));
+  assert.deepEqual(head, ['pr', 'list', '--state', 'open', '--head', 'feature/27-x', '--json', 'number,author,headRefName,title,body', '--limit', '100']);
+  assert.equal(r.openPRs.length, 1);
+});
+
+test('no --head query when no branch is known', async () => {
+  const gh = ghStub();
+  await run({ gh, git: gitStub() });
+  assert.equal(gh.calls.some((a) => a.includes('--head')), false);
+});
+
+test('gh failure on the --head query: unknown', async () => {
+  const r = await run({ branch: 'feature/27-x', gh: ghStub({ headPrs: bad('rate limited') }), git: gitStub() });
+  assert.equal(r.verdict, 'unknown');
+  assert.match(r.reason, /gh pr list --head/);
 });
 
 test('ours: my own PR', async () => {
@@ -224,6 +255,21 @@ test('branch exists but authors cannot be read (fetch fails): not free, unknown'
   assert.match(r.reason, /fetch/);
 });
 
+test('git log failing after a successful ls-remote and fetch: unknown', async () => {
+  const git = gitStub({ remote: 'abc\trefs/heads/feature/27-x\n', log: bad('bad revision') });
+  const r = await run({ branch: 'feature/27-x', gh: ghStub(), git });
+  assert.equal(r.remoteBranch.exists, true);
+  assert.equal(r.verdict, 'unknown');
+  assert.match(r.reason, /git log/);
+});
+
+test('remote branch with mixed mine and others commits: taken, both listed as authors', async () => {
+  const git = gitStub({ remote: 'abc\trefs/heads/feature/27-x\n', log: 'Me Dev|me@x.io\nOther Person|o@x.io\n' });
+  const r = await run({ branch: 'feature/27-x', gh: ghStub(), git });
+  assert.equal(r.verdict, 'taken');
+  assert.deepEqual(r.remoteBranch.authors, ['Me Dev', 'Other Person']);
+});
+
 test('invalid issue number: unknown, no throw', async () => {
   const r = await checkCollision({ issue: 'abc', cwd: here, config, gh: ghStub(), git: gitStub() });
   assert.equal(r.verdict, 'unknown');
@@ -231,8 +277,14 @@ test('invalid issue number: unknown, no throw', async () => {
 });
 
 test('CLI: prints JSON with the full shape and exits 0 even without a usable gh', () => {
-  const env = { ...process.env, PATH: path.dirname(process.execPath) };
-  const res = spawnSync(process.execPath, [cli, '27', '--branch', 'feature/27-x'], { cwd: here, env, encoding: 'utf8' });
+  const empty = mkdtempSync(path.join(os.tmpdir(), 'nd-nogh-'));
+  const env = { PATH: empty, ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) };
+  let res;
+  try {
+    res = spawnSync(process.execPath, [cli, '27', '--branch', 'feature/27-x'], { cwd: here, env, encoding: 'utf8' });
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
   assert.equal(res.status, 0);
   const out = JSON.parse(res.stdout);
   assert.equal(out.verdict, 'unknown');

@@ -91,18 +91,30 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
   if (!branchName && !pattern.includes('${slug}')) branchName = pattern.replaceAll('${issue}', String(n));
   result.remoteBranch.name = branchName;
 
-  const prCmd = ['pr', 'list', '--state', 'open', '--search', `${n} in:title,body`, '--limit', '100', '--json', 'number,author,headRefName,title,body'];
-  const prRes = attempt(runGh, prCmd);
-  if (!prRes.ok) return unknown(result, 'gh pr list', prRes.why);
-  let prData;
-  try {
-    prData = JSON.parse(prRes.stdout);
-    if (!Array.isArray(prData)) throw new Error('not an array');
-  } catch {
-    return unknown(result, 'gh pr list', 'unparsable JSON');
+  const PR_FIELDS = 'number,author,headRefName,title,body';
+  /** One `gh pr list` query -> { prs } or { fail }. */
+  const queryPRs = (extra, label) => {
+    const res = attempt(runGh, ['pr', 'list', '--state', 'open', ...extra, '--json', PR_FIELDS, '--limit', '100']);
+    if (!res.ok) return { fail: unknown(result, label, res.why) };
+    try {
+      const data = JSON.parse(res.stdout);
+      if (!Array.isArray(data)) throw new Error('not an array');
+      return { prs: data };
+    } catch {
+      return { fail: unknown(result, label, 'unparsable JSON') };
+    }
+  };
+  // Search does not cover head ref names, so a PR from the issue's branch is looked up by --head as well.
+  const searched = queryPRs(['--search', `${n} in:title,body`], 'gh pr list');
+  if (searched.fail) return searched.fail;
+  const byHead = branchName ? queryPRs(['--head', branchName], 'gh pr list --head') : { prs: [] };
+  if (byHead.fail) return byHead.fail;
+  const found = new Map();
+  for (const p of searched.prs) {
+    if (refersTo(p.title, n) || refersTo(p.body, n) || (branchName && p.headRefName === branchName)) found.set(p.number, p);
   }
-  result.openPRs = prData
-    .filter((p) => refersTo(p.title, n) || refersTo(p.body, n) || (branchName && p.headRefName === branchName))
+  for (const p of byHead.prs) found.set(p.number, p);
+  result.openPRs = [...found.values()]
     .map((p) => ({ number: p.number, author: p.author?.login ?? null, head: p.headRefName ?? null }));
   const theirPRs = result.openPRs.filter((p) => lower(p.author) !== lower(me));
   const myPRs = result.openPRs.filter((p) => lower(p.author) === lower(me));
