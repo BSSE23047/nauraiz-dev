@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 — 2026-10-30
+
+- The Stop cost line names every total in plain words: `tokens this session (main thread): output 15.4k, cache read 3.16M, cache write 41k, input 82`.
+- `init` ends by telling you to commit its setup files on their own, through the base branch, before starting a task: a task's scope check otherwise counts them.
+- Fixed a test that hard-coded the plugin version (CI was red on 0.1.1; the plugin itself was unaffected).
+
 ## 0.1.1 — 2026-10-30
 
 - Skills read templates and references through `scripts/show.mjs` instead of reading plugin files directly. A project whose own hook denies reads outside the repo (the plugin cache is outside every repo) blocked `init` in 0.1.0.

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideStop } from '../scripts/lib/stop-decision.mjs';
+import { compact, decideStop } from '../scripts/lib/stop-decision.mjs';
 
 const GATE = { build: 'npm run build' };
 const cfg = (enforcement, extra = {}) => ({ enforcement, state: 'none', gate: GATE, ...extra });
@@ -9,9 +9,18 @@ const bash = (ts, command) => ({ ts, role: 'assistant', toolUses: [{ name: 'Bash
 const usage = (ts, i, o, cr, cw) => ({ ts, role: 'assistant', toolUses: [], usage: { input: i, output: o, cacheRead: cr, cacheWrite: cw }, msgId: null });
 const base = { found: true, sessionMdMtime: null, warned: [] };
 
-test('cost line uses raw input/output/cacheRead totals', () => {
-  const r = decideStop({ ...base, config: cfg('advisory'), entries: [usage(1, 10, 20, 30, 40)] });
-  assert.equal(r.costLine, 'nauraiz-dev · tokens in/out/cache: 10/20/30');
+test('cost line names every total, main thread only', () => {
+  const r = decideStop({ ...base, config: cfg('advisory'), entries: [usage(1, 82, 15363, 3157462, 41000)] });
+  assert.equal(r.costLine, 'nauraiz-dev · tokens this session (main thread): output 15.4k, cache read 3.16M, cache write 41k, input 82');
+});
+
+test('compact numbers', () => {
+  assert.equal(compact(0), '0');
+  assert.equal(compact(999), '999');
+  assert.equal(compact(1000), '1k');
+  assert.equal(compact(15363), '15.4k');
+  assert.equal(compact(3157462), '3.16M');
+  assert.equal(compact(2000000), '2M');
 });
 
 test('advisory with edits and no gate run: cost only', () => {

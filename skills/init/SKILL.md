@@ -75,6 +75,6 @@ Three limits apply to every step:
    project's own edit hook already asks; protected paths are still denied). Otherwise
    leave `"scopeAsk": true`.
 
-7. Print every file written, changed or left alone, and anything the user should still
-   fill in by hand (an empty gate, a vague description). Then tell them the next step:
-   start a new Claude Code session, so the hooks pick up the config and CLAUDE.md.
+7. Print every file written, changed or left alone, and anything still to fill in by hand.
+   Next steps: commit these setup files on their own, through the base branch and before
+   any task branch (a task's scope check would count them), then start a new session.

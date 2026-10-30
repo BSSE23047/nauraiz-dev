@@ -9,9 +9,17 @@ import { isBookkeeping } from './bookkeeping.mjs';
  * strict mode whenever a problem exists. With `cwd`, edits to bookkeeping files (isBookkeeping) are
  * not counted as work.
  */
+/** 82 → "82", 15363 → "15.4k", 3157462 → "3.16M". */
+export function compact(n) {
+  if (n < 1000) return String(n);
+  if (n < 999950) return `${(n / 1e3).toFixed(1).replace(/\.0$/, '')}k`;
+  return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
+}
+
 export function decideStop({ config, found, entries, sessionMdMtime, warned, cwd }) {
-  const totals = tokenTotals(entries);
-  const costLine = `nauraiz-dev · tokens in/out/cache: ${totals.input}/${totals.output}/${totals.cacheRead}`;
+  const t = tokenTotals(entries);
+  const costLine = `nauraiz-dev · tokens this session (main thread): output ${compact(t.output)}, `
+    + `cache read ${compact(t.cacheRead)}, cache write ${compact(t.cacheWrite)}, input ${compact(t.input)}`;
 
   const editTs = lastEditTs(entries, { cwd, exclude: (rel) => isBookkeeping(rel, config, cwd) });
   const edits = editTs !== null;

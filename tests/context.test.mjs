@@ -17,7 +17,7 @@ test('unconfigured repo gets the two-line header', () => {
   assert.match(t, /Triage/);
   assert.ok(!/session\.md/.test(t));
   assert.equal(t.split('\n').length, 2);
-  assert.match(t.split('\n')[0], /^nauraiz-dev v0\.1\.0 · enforcement=advisory · state=none · no project config: run \/nauraiz-dev:init \(project\) or \/nauraiz-dev:setup \(machine\)$/);
+  assert.match(t.split('\n')[0], /^nauraiz-dev v\d+\.\d+\.\d+ · enforcement=advisory · state=none · no project config: run \/nauraiz-dev:init \(project\) or \/nauraiz-dev:setup \(machine\)$/);
 });
 
 test('scaffold repo includes session head and 5 backlog items', () => {

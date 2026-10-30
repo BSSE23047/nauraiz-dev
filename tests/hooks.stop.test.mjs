@@ -39,7 +39,7 @@ test('garbage stdin and missing transcript never throw', () => withData(async (d
   assert.equal(bad.code, 0);
   const none = await runHook('stop', { session_id: 's1', transcript_path: '/nope/missing.jsonl', cwd: fx('empty') }, { CLAUDE_PLUGIN_DATA: data });
   assert.equal(none.code, 0);
-  assert.match(JSON.parse(none.stdout).systemMessage, /tokens in\/out\/cache: 0\/0\/0/);
+  assert.match(JSON.parse(none.stdout).systemMessage, /tokens this session \(main thread\): output 0, cache read 0, cache write 0, input 0/);
 }));
 
 test('guided, gate ran after the last edit: no warning', () => withData(async (data) => {
