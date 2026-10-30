@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, MAX_CONTEXT_CHARS } from '../scripts/lib/config.mjs';
 import { buildSessionContext, truncate } from '../scripts/lib/context.mjs';
 import { fx } from './helpers.mjs';
+
+const START_LINE = 'Task start: run /nauraiz-dev:start-task on the first substantive request (checks who owns the issue, asks before building, routes the process).';
 
 const build = (name, extra = {}) =>
   buildSessionContext({ cwd: fx(name), ...loadConfig(fx(name)), branch: 'main', plan: null, ...extra });
@@ -14,9 +16,10 @@ test('unconfigured repo gets the two-line header', () => {
   const t = build('empty');
   assert.match(t, /no project config/);
   assert.match(t, /\/nauraiz-dev:setup/);
-  assert.match(t, /Triage/);
+  assert.match(t, /Task start: run \/nauraiz-dev:start-task/);
   assert.ok(!/session\.md/.test(t));
   assert.equal(t.split('\n').length, 2);
+  assert.equal(t.split('\n')[1], START_LINE);
   assert.match(t.split('\n')[0], /^nauraiz-dev v\d+\.\d+\.\d+ · enforcement=advisory · state=none · no project config: run \/nauraiz-dev:init \(project\) or \/nauraiz-dev:setup \(machine\)$/);
 });
 
@@ -91,5 +94,83 @@ test('oversized session head is truncated to the cap', () => {
     const t = buildSessionContext({ cwd: dir, ...loadConfig(dir), branch: null, plan: null });
     assert.ok(t.length <= MAX_CONTEXT_CHARS);
     assert.ok(t.endsWith('…[truncated]'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('local-only config shows mode=local and the gate line with the runner command', () => {
+  const t = build('local-only');
+  const lines = t.split('\n');
+  assert.match(lines[0], / · mode=local$/);
+  assert.equal(lines[1], START_LINE);
+  assert.ok(lines.includes('Gate: test (run node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"; read real exit codes, never a grepped summary)'));
+  assert.ok(t.length <= MAX_CONTEXT_CHARS);
+});
+
+test('local mode with no gate says so; project mode has no mode tag or Gate line', () => {
+  const t = buildSessionContext({
+    cwd: fx('configured'), found: true, error: null, branch: null, plan: null, mode: 'local',
+    config: { enforcement: 'guided', state: 'none', gate: {} },
+  });
+  assert.match(t, /^Gate: none configured$/m);
+  const p = build('configured', { mode: 'project' });
+  assert.doesNotMatch(p, /mode=local|^Gate:/m);
+});
+
+test('an unparsable local-only file reports config unreadable, not "no project config"', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-ctx-'));
+  try {
+    mkdirSync(path.join(dir, '.claude'));
+    writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.local.json'), '{ nope');
+    const loaded = loadConfig(dir);
+    assert.equal(loaded.found, false);
+    assert.equal(loaded.present, false);
+    const head = buildSessionContext({ cwd: dir, ...loaded, branch: null, plan: null }).split('\n')[0];
+    assert.match(head, / · config unreadable: .*nauraiz-dev\.local\.json/);
+    assert.doesNotMatch(head, /no project config/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('superpowers warning appears only when it is not installed and enabled', () => {
+  const warning = 'superpowers is not installed or not enabled: run /nauraiz-dev:setup';
+  const has = (superpowers) => build('configured', { superpowers }).split('\n').includes(warning);
+  assert.equal(has({ installed: false, enabled: false }), true);
+  assert.equal(has({ installed: true, enabled: false }), true);
+  assert.equal(has({ installed: true, enabled: true }), false);
+  assert.equal(has(undefined), false);
+});
+
+test('a mockupRoot link that leaves the folder is flagged with the real path', (t) => {
+  const outside = mkdtempSync(path.join(os.tmpdir(), 'nd-out-'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-ctx-'));
+  try {
+    try {
+      symlinkSync(outside, path.join(dir, 'mockups'), 'junction');
+    } catch {
+      t.skip('cannot create a link here');
+      return;
+    }
+    const out = buildSessionContext({
+      cwd: dir, found: true, error: null, branch: null, plan: null,
+      config: { enforcement: 'guided', state: 'none', mockupRoot: 'mockups' },
+    });
+    const real = realpathSync(outside);
+    assert.ok(out.split('\n').includes(`Mockup root resolves outside this folder (${real}); project hooks may deny it: copy it instead of linking.`));
+    assert.match(out, /^Mockup root: mockups$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('a mockupRoot inside the folder gets no warning; a missing one is reported', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-ctx-'));
+  try {
+    mkdirSync(path.join(dir, 'mockups'));
+    const withRoot = (mockupRoot) => buildSessionContext({
+      cwd: dir, found: true, error: null, branch: null, plan: null,
+      config: { enforcement: 'guided', state: 'none', mockupRoot },
+    });
+    assert.doesNotMatch(withRoot('mockups'), /resolves outside|not found/);
+    assert.match(withRoot('gone'), /^Mockup root not found: gone$/m);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

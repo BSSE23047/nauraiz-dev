@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { check, nodeStatus } from '../scripts/setup/check.mjs';
+import { check, nodeStatus, superpowersStatus } from '../scripts/setup/check.mjs';
 import { forbiddenPattern } from './forbidden.mjs';
 
 const FORBIDDEN = forbiddenPattern();
@@ -218,4 +218,65 @@ test('setup skill frontmatter, and no client material in the setup files', () =>
   for (const f of files) {
     if (FORBIDDEN) assert.doesNotMatch(readFileSync(path.join(root, f), 'utf8'), FORBIDDEN, f);
   }
+});
+
+/** A throwaway home plus project dir for superpowersStatus; files are JSON values keyed by relative path. */
+function withHomeAndCwd({ home: homeFiles = {}, cwd: cwdFiles = {} }, fn) {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'nd-sp-home-'));
+  const cwd = mkdtempSync(path.join(os.tmpdir(), 'nd-sp-cwd-'));
+  const put = (base, rel, v) => {
+    mkdirSync(path.dirname(path.join(base, rel)), { recursive: true });
+    writeFileSync(path.join(base, rel), JSON.stringify(v));
+  };
+  try {
+    for (const [rel, v] of Object.entries(homeFiles)) put(home, rel, v);
+    for (const [rel, v] of Object.entries(cwdFiles)) put(cwd, rel, v);
+    return fn({ home, cwd });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
+const SP = 'superpowers@claude-plugins-official';
+const installedFile = { 'plugins/installed_plugins.json': { version: 2, plugins: { [SP]: entry } } };
+
+test('superpowersStatus: enabled in user settings', () => withHomeAndCwd({
+  home: { ...installedFile, 'settings.json': { enabledPlugins: { [SP]: true } } },
+}, ({ home, cwd }) => {
+  assert.deepEqual(superpowersStatus({ cwd, home }), { installed: true, enabled: true });
+}));
+
+test('superpowersStatus: a project-scope enable counts', () => withHomeAndCwd({
+  home: { ...installedFile, 'settings.json': {} },
+  cwd: { '.claude/settings.json': { enabledPlugins: { [SP]: true } } },
+}, ({ home, cwd }) => {
+  assert.deepEqual(superpowersStatus({ cwd, home }), { installed: true, enabled: true });
+}));
+
+test('superpowersStatus: settings.local.json false overrides an earlier true', () => withHomeAndCwd({
+  home: { ...installedFile, 'settings.json': { enabledPlugins: { [SP]: true } } },
+  cwd: {
+    '.claude/settings.json': { enabledPlugins: { [SP]: true } },
+    '.claude/settings.local.json': { enabledPlugins: { [SP]: false } },
+  },
+}, ({ home, cwd }) => {
+  assert.deepEqual(superpowersStatus({ cwd, home }), { installed: true, enabled: false });
+}));
+
+test('superpowersStatus: a later true re-enables what an earlier file disabled', () => withHomeAndCwd({
+  home: { ...installedFile, 'settings.json': { enabledPlugins: { [SP]: false } } },
+  cwd: { '.claude/settings.json': { enabledPlugins: { [SP]: true } } },
+}, ({ home, cwd }) => {
+  assert.deepEqual(superpowersStatus({ cwd, home }), { installed: true, enabled: true });
+}));
+
+test('superpowersStatus: not installed, other plugins and missing files are false', () => {
+  withHomeAndCwd({
+    home: { 'settings.json': { enabledPlugins: { 'superpowers-extras@x': true } } },
+  }, ({ home, cwd }) => {
+    assert.deepEqual(superpowersStatus({ cwd, home }), { installed: false, enabled: false });
+  });
+  withHomeAndCwd({}, ({ home, cwd }) => {
+    assert.deepEqual(superpowersStatus({ cwd, home }), { installed: false, enabled: false });
+  });
 });

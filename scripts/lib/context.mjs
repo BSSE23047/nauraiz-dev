@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAX_CONTEXT_CHARS } from './config.mjs';
@@ -35,13 +35,36 @@ function readLines(file) {
 const toPosix = (p) => p.split(path.sep).join('/');
 
 /**
- * The context injected at session start: a header, the triage line and, depending on the project's
+ * A warning line when the configured mockup root is missing or resolves (through a link) outside `cwd`,
+ * else null. Project hooks may deny a path outside the folder, so a link out of it is worth saying.
+ */
+function mockupRootWarning(cwd, mockupRoot) {
+  let real;
+  try {
+    real = realpathSync(path.resolve(cwd, mockupRoot));
+  } catch {
+    return `Mockup root not found: ${mockupRoot}`;
+  }
+  try {
+    const rel = path.relative(realpathSync(cwd), real);
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      return `Mockup root resolves outside this folder (${real}); project hooks may deny it: copy it instead of linking.`;
+    }
+  } catch {
+    // an unresolvable cwd gives nothing to compare against
+  }
+  return null;
+}
+
+/**
+ * The context injected at session start: a header, the start-task line (plus the local-mode gate and any setup warnings) and, depending on the project's
  * state, the head of session.md, the top backlog headings or the active plan's handoff.
  * `source` is the SessionStart payload source (startup|resume|clear|compact|fork).
  */
-export function buildSessionContext({ cwd, config, found, present, error, branch, plan, source }) {
+export function buildSessionContext({ cwd, config, found, error, branch, plan, source, mode, superpowers }) {
   let header = `nauraiz-dev v${VERSION} · enforcement=${config.enforcement} · state=${config.state}`;
-  if (!found && present) header += ` · config unreadable: ${error}`; // the file exists: init is not the fix
+  if (mode === 'local') header += ' · mode=local';
+  if (!found && error) header += ` · config unreadable: ${error}`; // a file exists but did not parse: init is not the fix
   else {
     if (!found) header += ' · no project config: run /nauraiz-dev:init (project) or /nauraiz-dev:setup (machine)';
     if (error) header += ` · config error: ${error}`;
@@ -49,8 +72,17 @@ export function buildSessionContext({ cwd, config, found, present, error, branch
 
   const out = [
     header,
-    'Triage the first substantive request: small → do it and verify; normal/large → plan before any edit.',
+    'Task start: run /nauraiz-dev:start-task on the first substantive request (checks who owns the issue, asks before building, routes the process).',
   ];
+  if (mode === 'local') {
+    const gate = Object.keys(config.gate ?? {});
+    out.push(gate.length
+      ? `Gate: ${gate.join(', ')} (run node "\${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"; read real exit codes, never a grepped summary)`
+      : 'Gate: none configured');
+  }
+  if (superpowers && !(superpowers.installed && superpowers.enabled)) {
+    out.push('superpowers is not installed or not enabled: run /nauraiz-dev:setup');
+  }
   if (source === 'compact') out.push('Context was just compacted: refresh the handoff with /nauraiz-dev:handoff.');
 
   if (found && config.state === 'scaffold') {
@@ -73,7 +105,11 @@ export function buildSessionContext({ cwd, config, found, present, error, branch
     out.push(`## plan handoff (${rel || plan.path})`, plan.handoff);
   }
 
-  if (config.mockupRoot) out.push(`Mockup root: ${config.mockupRoot}`);
+  if (config.mockupRoot) {
+    out.push(`Mockup root: ${config.mockupRoot}`);
+    const warning = mockupRootWarning(cwd, config.mockupRoot);
+    if (warning) out.push(warning);
+  }
 
   return truncate(out.join('\n'), MAX_CONTEXT_CHARS);
 }

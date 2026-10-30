@@ -34,3 +34,11 @@ test('a config problem is also shown to the user as a systemMessage', async () =
     assert.equal(out.systemMessage, undefined, name);
   }
 });
+
+test('local-only repo gets mode=local, the gate line and the start-task line', async () => {
+  const { stdout } = await runHook('session-start', { cwd: fx('local-only'), source: 'startup' });
+  const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+  assert.match(ctx.split('\n')[0], / · mode=local$/);
+  assert.match(ctx, /^Task start: run \/nauraiz-dev:start-task /m);
+  assert.match(ctx, /^Gate: test \(run node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/gate\/run\.mjs"/m);
+});

@@ -74,6 +74,29 @@ function duplicateHooks(settings) {
 }
 
 /**
+ * Whether superpowers is installed (user plugin registry) and enabled in the settings that apply to `cwd`:
+ * `<home>/settings.json`, then `<cwd>/.claude/settings.json`, then `<cwd>/.claude/settings.local.json`.
+ * A later file that mentions a superpowers key overrides an earlier one, so a project-scope enable counts
+ * and a local `false` switches it off. Unreadable files count as absent.
+ */
+export function superpowersStatus({ cwd, home = path.join(os.homedir(), '.claude') }) {
+  const installedMap = readJsonObject(path.join(home, 'plugins', 'installed_plugins.json'))?.plugins;
+  const installed = hasPlugin(isPlainObject(installedMap) ? Object.keys(installedMap) : [], 'superpowers');
+  let enabled = false;
+  for (const file of [
+    path.join(home, 'settings.json'),
+    path.join(cwd, '.claude', 'settings.json'),
+    path.join(cwd, '.claude', 'settings.local.json'),
+  ]) {
+    const map = readJsonObject(file)?.enabledPlugins;
+    if (!isPlainObject(map)) continue;
+    const keys = Object.keys(map).filter((k) => k.startsWith('superpowers@'));
+    if (keys.length) enabled = keys.some((k) => map[k] === true);
+  }
+  return { installed, enabled };
+}
+
+/**
  * Inspect `home` (default ~/.claude) and report the machine state plus the fixes to offer.
  * `skipClaude` skips running `claude --version`; `nodeVersion` is for tests.
  */
