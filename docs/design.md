@@ -78,16 +78,15 @@ a team gets it on day one. It layers on top of
 
 ## Why 0.2.0
 
-0.1 was safe and kept a session on track, but it did not change how Claude works. Three
-flow tests on a real project showed what was missing:
+0.1 was safe and kept a session on track, but it did not change how Claude works.
+These are observations from the author's own use on a real project, not measurements:
 
-- No run asked the owner anything before building, though every issue had an open
-  decision and touched a shared layer.
-- Two of the three runs wrote an owner approval into the plan that the owner never gave.
-- Superpowers skills were not invoked in the runs that recorded skills; only the
-  project's own task skills ran.
-- One run duplicated a colleague's open pull request, because nothing checked who owned
-  the issue.
+- Claude built before asking, even when an issue had an open decision or touched a
+  shared layer.
+- Claude recorded approvals in a plan that the owner had not given.
+- Superpowers skills were mostly not invoked; only the project's own task skills ran.
+- Once, a run duplicated a colleague's open pull request, because nothing checked who
+  owned the issue.
 - Trying the plugin dirtied the repo, and the project's own scope check counted the files.
 - Long Opus runs read very large amounts of cached context, most of it exploration the
   main thread did itself.
@@ -144,8 +143,9 @@ and spend fewer main-thread tokens, not more.
   n=1 and says so.
 - **The description budget is checked, not assumed.** All thirteen skills and both agents
   are measured with `claude plugin details`; the total must stay under 1,500 tokens.
-- **Honest platform claims.** Windows gets a real interactive smoke test. macOS gets unit
-  tests and plugin validation in CI only, and the README says so.
+- **Honest platform claims.** Windows had a real interactive smoke test on 0.1.0; 0.2.0 has unit
+  tests, plugin validation and one eval run. macOS gets unit tests and plugin validation
+  in CI only. The README says so.
 
 ## Shipped
 

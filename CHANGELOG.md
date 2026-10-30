@@ -37,6 +37,8 @@ Hooks and scripts:
 - `Stop`: counts a gate-runner call as a gate run; cost line adds subagent tokens and elapsed minutes.
 - `setup` recommends the user-scope install.
 
+Evals: 11 of 13 cases passed on the release run; see evals/results/2026-10-31-summary.md.
+
 Docs: README rewritten for 0.2.0; design notes list the 0.2.0 decisions. No measured numbers are published yet.
 
 ## 0.1.2 — 2026-10-30

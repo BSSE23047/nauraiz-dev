@@ -56,7 +56,7 @@ Thirteen. Skills that are not marked "you only" can also fire from a request or 
 
 Two agents back them: `implementer` (one task per dispatch, test first, verifies before it reports) and `reviewer` (read-only, fresh context, findings ranked by severity).
 
-Skill and agent descriptions are the only part that is always in context. `claude plugin details` reports about 940 tokens for all thirteen skills and both agents together; the plugin's own budget is 1,500.
+`claude plugin details` reports about 940 tokens for the skill and agent listing (all thirteen skills and both agents), which is in every session; the plugin's own budget for it is 1,500. That is not the whole always-on cost: the `SessionStart` header (up to 6,000 characters) is added to every session, and `SubagentStart` injects the project's rules into each subagent. The header's size has not been measured, so no number is given for it.
 
 ## What it asks before building, and why
 
@@ -68,7 +68,7 @@ Triage first: a typo or one-line fix gets no questions. For anything bigger, `st
 
 At most three questions in a round, each with a recommended answer and the cost if the recommendation is wrong. Headless (`claude -p`, no one to ask), it does not ask: it writes each question and its recommended answer into the plan under "Decisions to confirm" and goes on with the recommendation.
 
-The reason: in flow tests on a real project, runs built straight through issues that had open decisions, wrote an owner approval into a plan that the owner never gave, and once duplicated a colleague's open pull request. So:
+The reason, from the author's own use on a real project (observations, not measurements): in real runs, Claude built before asking, recorded approvals the owner had not given, and once duplicated a colleague's open pull request. So:
 
 - **Collision check.** Before work starts, `start-task` and `ship` look at who is assigned, who has an open PR that references the issue, and who pushed the branch. If it is someone else's, they stop and tell you who and where. If `gh` is missing, offline or not signed in, the answer is "unknown", never "free", and you are asked.
 - **Approvals.** An `*_approval` field in a plan is `pending owner confirmation` unless you said yes in this session; then it quotes the date and your words. A hook asks before an edit writes any other value into a plan.
@@ -124,7 +124,7 @@ Each arm runs once and is capped by `--max-budget-usd` (default 3 USD). The repo
 
 ## Platforms and testing
 
-- Windows: unit tests, `claude plugin validate`, and a real interactive session as a smoke test.
+- Windows: a real interactive smoke test was run on 0.1.0 ([docs/notes/smoke-0.1.0.md](docs/notes/smoke-0.1.0.md)). 0.2.0 has unit tests, `claude plugin validate` and one eval run, but no interactive smoke test yet.
 - macOS: unit tests and `claude plugin validate` in CI only. No real session has been run on macOS.
 
 CI runs on Windows and macOS with Node 22 and 24.
@@ -150,7 +150,7 @@ CI runs on Windows and macOS with Node 22 and 24.
 - Not a document-generation framework: no sprint docs, personas or ceremony files.
 - Not a general agent pack: two agents.
 - Not for other harnesses. Claude Code only.
-- Not blocking by default. `guided` denies protected paths and asks; it warns once on a skipped gate. Blocking is opt-in with `strict`.
+- Does not block your work by default: it denies only protected paths and asks before out-of-plan edits. It warns once on a skipped gate; forcing another turn is opt-in with `strict`.
 - It never requires screenshots, browser comparisons or live-login steps. A project may add them to its own gate.
 
 The design and its reasoning are in [docs/design.md](docs/design.md).
