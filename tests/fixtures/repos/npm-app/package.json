@@ -1,0 +1,10 @@
+{
+  "name": "npm-app",
+  "private": true,
+  "scripts": {
+    "build": "node build.js",
+    "test": "node --test",
+    "lint": "eslint .",
+    "start": "node index.js"
+  }
+}

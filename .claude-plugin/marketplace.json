@@ -1,0 +1,6 @@
+{
+  "name": "nauraiz-dev",
+  "owner": { "name": "Nauraiz Haider" },
+  "description": "Development workflow plugin",
+  "plugins": [{ "name": "nauraiz-dev", "source": "./", "description": "Development workflow plugin" }]
+}

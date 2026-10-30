@@ -1,0 +1,16 @@
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "example-tools@example-marketplace": false
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"/opt/tools/nauraiz-dev/scripts/hooks/stop.mjs\"" },
+          { "type": "command", "command": "node \"/opt/tools/other/notify.mjs\"" }
+        ]
+      }
+    ]
+  }
+}

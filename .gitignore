@@ -1,0 +1,9 @@
+node_modules/
+.work/
+.superpowers/
+*.local.json
+!tests/fixtures/**/*.local.json
+!tests/fixtures/**/.work/
+evals/results/*/
+.forbidden-terms
+docs/internal/

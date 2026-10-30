@@ -1,0 +1,12 @@
+{
+  "$comment": "nauraiz-dev project settings, committed with the repo and written by /nauraiz-dev:init. Machine-specific values such as mockupRoot go in nauraiz-dev.local.json, which is git-ignored.",
+  "enforcement": "guided",
+  "state": "{{state}}",
+  "scopeAsk": true,
+  "gate": {},
+  "protectedPaths": [],
+  "models": { "small": "sonnet", "normal": "opus", "large": "opus", "review": "opus", "fix-round": "sonnet" },
+  "branch": { "base": "{{baseBranch}}", "pattern": "feature/${issue}-${slug}", "merge": "merge" },
+  "plan": { "dir": "{{planDir}}", "template": null },
+  "pr": { "sections": ["Summary", "Steps ↔ commits", "Gate output", "Decisions to confirm", "Risks", "Unverified"] }
+}

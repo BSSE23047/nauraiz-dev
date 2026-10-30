@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "plugins": {
+    "superpowers@claude-plugins-official": [
+      { "scope": "user", "installPath": "/home/example/.claude/plugins/cache/superpowers", "version": "1.0.0" }
+    ],
+    "example-tools@example-marketplace": [
+      { "scope": "user", "installPath": "/home/example/.claude/plugins/cache/example-tools", "version": "0.2.0" }
+    ]
+  }
+}
