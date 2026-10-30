@@ -16,14 +16,17 @@ export function compact(n) {
   return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
 }
 
-export function decideStop({ config, found, entries, sessionMdMtime, warned, cwd, subagentEntries = [] }) {
+const MAX_WALL_MINUTES = 1440; // a resumed session spans days of idle time: wall time stops meaning anything
+
+export function decideStop({ config, found, entries, sessionMdMtime, warned, cwd, subagentEntries = [], subagentTotals, subagentsPartial = false }) {
   const t = tokenTotals(entries);
-  const sub = tokenTotals(subagentEntries);
+  const sub = subagentTotals ?? tokenTotals(subagentEntries);
   const mins = elapsedMinutes(entries);
   const costLine = `nauraiz-dev · tokens this session: main out ${compact(t.output)}, `
     + `cache read ${compact(t.cacheRead)}, cache write ${compact(t.cacheWrite)}, input ${compact(t.input)}`
     + (sub.output > 0 || sub.cacheRead > 0 ? ` · subagents out ${compact(sub.output)}, cache read ${compact(sub.cacheRead)}` : '')
-    + (mins !== null ? ` · ${mins} min` : '');
+    + (subagentsPartial ? ' · subagents partial' : '')
+    + (mins !== null && mins <= MAX_WALL_MINUTES ? ` · ${mins} min wall` : '');
 
   const editTs = lastEditTs(entries, { cwd, exclude: (rel) => isBookkeeping(rel, config, cwd) });
   const edits = editTs !== null;

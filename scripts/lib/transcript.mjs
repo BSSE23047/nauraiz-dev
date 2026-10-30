@@ -1,8 +1,9 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { toRelative } from './paths.mjs';
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+const SUBAGENT_MAX_BYTES = 64 * 1024 * 1024;
 
 function parseTs(value) {
   if (typeof value !== 'string') return null;
@@ -56,18 +57,65 @@ export function readTranscript(file) {
  * `<dir>/<id>/subagents/agent-*.jsonl` (their `.meta.json` neighbours are ignored). No dir gives [].
  */
 export function readSubagentEntries(transcriptPath) {
+  return subagentFiles(transcriptPath).flatMap((f) => readTranscript(f));
+}
+
+/** Absolute paths of a session's subagent transcripts (sorted); [] when there are none. */
+function subagentFiles(transcriptPath) {
   if (typeof transcriptPath !== 'string' || !transcriptPath.endsWith('.jsonl')) return [];
   const dir = path.join(transcriptPath.slice(0, -'.jsonl'.length), 'subagents');
   let names;
   try { names = readdirSync(dir); } catch { return []; }
-  return names.filter((n) => n.endsWith('.jsonl')).sort().flatMap((n) => readTranscript(path.join(dir, n)));
+  return names.filter((n) => n.endsWith('.jsonl')).sort().map((n) => path.join(dir, n));
+}
+
+/**
+ * Summed token totals of a session's subagent transcripts without re-reading finished ones.
+ * `cache` maps a file path to `{ size, mtimeMs, totals }` from an earlier call; an entry whose size and
+ * mtime still match is trusted. Files not cached are read until `maxBytes` would be passed; the rest are
+ * skipped and `partial` is true. Returns `{ totals, cache, partial }`; the returned cache holds only the
+ * files present now (store it for the next call).
+ */
+export function subagentUsage(transcriptPath, { cache = {}, maxBytes = SUBAGENT_MAX_BYTES } = {}) {
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  const next = {};
+  let budget = maxBytes;
+  let partial = false;
+  const prior = cache && typeof cache === 'object' ? cache : {};
+  for (const file of subagentFiles(transcriptPath)) {
+    let st;
+    try { st = statSync(file); } catch { continue; }
+    const hit = prior[file];
+    let fileTotals;
+    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs && hit.totals && typeof hit.totals === 'object') {
+      fileTotals = hit.totals;
+    } else if (st.size > budget) {
+      partial = true;
+      continue;
+    } else {
+      budget -= st.size;
+      fileTotals = tokenTotals(readTranscript(file));
+    }
+    next[file] = { size: st.size, mtimeMs: st.mtimeMs, totals: fileTotals };
+    for (const k of Object.keys(totals)) totals[k] += Number(fileTotals[k]) || 0;
+  }
+  return { totals, cache: next, partial };
 }
 
 /** Whole minutes from the first to the last timestamp; null with fewer than two timestamps. */
 export function elapsedMinutes(entries) {
-  const times = entries.map((e) => e.ts).filter((t) => t !== null);
-  if (times.length < 2) return null;
-  return Math.round((Math.max(...times) - Math.min(...times)) / 60000);
+  // a loop, not Math.max(...times): spreading a long session's timestamps overflows the call stack
+  let count = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const e of entries) {
+    if (e.ts === null) continue;
+    count++;
+    if (e.ts < min) min = e.ts;
+    if (e.ts > max) max = e.ts;
+  }
+  if (count < 2) return null;
+  return Math.round((max - min) / 60000);
 }
 
 function maxTs(entries, pred) {

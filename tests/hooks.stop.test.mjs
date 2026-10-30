@@ -37,7 +37,7 @@ test('prints the cost line from the sample transcript', () => withData(async (da
 test('cost line includes subagent totals and elapsed minutes from the session layout', () => withData(async (data) => {
   const transcript = path.join(path.dirname(sample), 'session', 'sess-1.jsonl');
   const r = await runHook('stop', { session_id: 's1', transcript_path: transcript, cwd: fx('empty') }, { CLAUDE_PLUGIN_DATA: data });
-  assert.match(JSON.parse(r.stdout).systemMessage, /main out 3k, cache read 110k, cache write 5k, input 30 · subagents out 4k, cache read 120k · 2 min/);
+  assert.match(JSON.parse(r.stdout).systemMessage, /main out 3k, cache read 110k, cache write 5k, input 30 · subagents out 4k, cache read 120k · 2 min wall/);
 }));
 
 test('garbage stdin and missing transcript never throw', () => withData(async (data) => {
@@ -158,4 +158,25 @@ test('guided: a second, different problem is still warned after the first warnin
     const third = await runHook('stop', { ...payload, transcript_path: writeTranscript(repo, [edit, line(now - 100_000, 'Bash', { command: 'npm test' })]) }, { CLAUDE_PLUGIN_DATA: data });
     assert.doesNotMatch(JSON.parse(third.stdout).systemMessage, /⚠/);
   } finally { fs.rmSync(repo, { recursive: true, force: true }); }
+}));
+
+test('subagent usage totals are cached in the session store and reused on the next stop', () => withData(async (data) => {
+  const transcript = path.join(path.dirname(sample), 'session', 'sess-1.jsonl');
+  const payload = { session_id: 'cache-1', transcript_path: transcript, cwd: fx('empty') };
+  await runHook('stop', payload, { CLAUDE_PLUGIN_DATA: data });
+  const prev = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = data;
+  try {
+    const cache = sessionStore('cache-1').get().subagentUsage;
+    const keys = Object.keys(cache ?? {});
+    assert.equal(keys.length, 1);
+    assert.equal(cache[keys[0]].totals.output, 4000);
+    // plant different totals under the same size+mtime: the hook must trust the cache, not re-read
+    cache[keys[0]].totals = { input: 0, output: 7000, cacheRead: 9000, cacheWrite: 0, total: 16000 };
+    sessionStore('cache-1').set({ subagentUsage: cache });
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_PLUGIN_DATA; else process.env.CLAUDE_PLUGIN_DATA = prev;
+  }
+  const r = await runHook('stop', payload, { CLAUDE_PLUGIN_DATA: data });
+  assert.match(JSON.parse(r.stdout).systemMessage, / · subagents out 7k, cache read 9k · /);
 }));

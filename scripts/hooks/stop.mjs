@@ -5,7 +5,7 @@ import { statSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../lib/config.mjs';
 import { readStdinJson } from '../lib/stdin.mjs';
-import { readSubagentEntries, readTranscript } from '../lib/transcript.mjs';
+import { readTranscript, subagentUsage } from '../lib/transcript.mjs';
 import { decideStop } from '../lib/stop-decision.mjs';
 import { sessionStore } from '../lib/session-store.mjs';
 
@@ -20,7 +20,14 @@ async function main() {
 
   const { config, found } = loadConfig(cwd);
   const entries = transcript ? readTranscript(transcript) : [];
-  const subagentEntries = transcript ? readSubagentEntries(transcript) : [];
+  const store = sessionStore(sessionId);
+  const stored = store.get();
+  // Finished subagent transcripts never change: their totals are cached by path+size+mtime, and a run
+  // reads at most 64 MB of new ones, so a long session stays well inside the hook timeout.
+  const sub = transcript ? subagentUsage(transcript, { cache: stored.subagentUsage }) : { totals: undefined, cache: {}, partial: false };
+  if (transcript) {
+    try { store.set({ subagentUsage: sub.cache }); } catch { /* a failed write only means a re-read next time */ }
+  }
 
   let sessionMdMtime = null;
   if (found && config.state === 'scaffold') {
@@ -31,16 +38,16 @@ async function main() {
     }
   }
 
-  const store = sessionStore(sessionId);
   // warned: problem strings already warned about this session. An old `{ warned: true }` store is
   // ignored (not an array), so at worst one problem is warned about once more.
   const { costLine, warning, block, problems, warnedAfter } = decideStop({
     config,
     found,
     entries,
-    subagentEntries,
+    subagentTotals: sub.totals,
+    subagentsPartial: sub.partial,
     sessionMdMtime,
-    warned: store.get().warned,
+    warned: stored.warned,
     cwd,
   });
 

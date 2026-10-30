@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { readTranscript, readSubagentEntries, elapsedMinutes, lastEditTs, lastGateTs, gatePrefixes, tokenTotals } from '../scripts/lib/transcript.mjs';
+import { readTranscript, readSubagentEntries, subagentUsage, elapsedMinutes, lastEditTs, lastGateTs, gatePrefixes, tokenTotals } from '../scripts/lib/transcript.mjs';
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const sample = path.join(dir, 'transcript.sample.jsonl');
@@ -149,4 +149,49 @@ test('elapsedMinutes rounds first-to-last timestamp to minutes, null under two t
   assert.equal(elapsedMinutes([at(5)]), null);
   assert.equal(elapsedMinutes([at(null), at(null)]), null);
   assert.equal(elapsedMinutes([]), null);
+});
+
+test('elapsedMinutes handles 200k timestamps without a stack overflow', () => {
+  const many = Array.from({ length: 200_000 }, (_, i) => ({ ts: i * 10, role: 'user', toolUses: [], usage: null, msgId: null }));
+  assert.equal(elapsedMinutes(many), Math.round((199_999 * 10) / 60000));
+});
+
+test('subagentUsage sums per-file totals, caches them by path+size+mtime and reuses a matching cache entry', () => {
+  const transcript = path.join(sessionDir, 'sess-1.jsonl');
+  const first = subagentUsage(transcript);
+  assert.equal(first.totals.output, 4000);
+  assert.equal(first.totals.cacheRead, 120000);
+  assert.equal(first.partial, false);
+  const keys = Object.keys(first.cache);
+  assert.equal(keys.length, 1);
+  assert.match(keys[0], /agent-a\.jsonl$/);
+  const entry = first.cache[keys[0]];
+  assert.equal(typeof entry.size, 'number');
+  assert.equal(typeof entry.mtimeMs, 'number');
+
+  // a cache entry with the same size and mtime is trusted: the file is not re-read
+  const planted = { [keys[0]]: { ...entry, totals: { input: 1, output: 7, cacheRead: 9, cacheWrite: 0, total: 17 } } };
+  const second = subagentUsage(transcript, { cache: planted });
+  assert.equal(second.totals.output, 7);
+  assert.equal(second.totals.cacheRead, 9);
+
+  // a stale entry (size differs) is re-read
+  const stale = { [keys[0]]: { ...entry, size: entry.size + 1, totals: { input: 1, output: 7, cacheRead: 9, cacheWrite: 0, total: 17 } } };
+  assert.equal(subagentUsage(transcript, { cache: stale }).totals.output, 4000);
+
+  // no dir: zero totals, empty cache
+  const none = subagentUsage(sample);
+  assert.equal(none.totals.total, 0);
+  assert.deepEqual(none.cache, {});
+});
+
+test('subagentUsage stops reading past maxBytes and reports partial; cached files cost no bytes', () => {
+  const transcript = path.join(sessionDir, 'sess-1.jsonl');
+  const capped = subagentUsage(transcript, { maxBytes: 10 });
+  assert.equal(capped.partial, true);
+  assert.equal(capped.totals.output, 0);
+  const warm = subagentUsage(transcript).cache;
+  const cachedRun = subagentUsage(transcript, { cache: warm, maxBytes: 10 });
+  assert.equal(cachedRun.partial, false);
+  assert.equal(cachedRun.totals.output, 4000);
 });

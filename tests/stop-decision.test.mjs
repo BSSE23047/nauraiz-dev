@@ -17,7 +17,7 @@ test('cost line names every total for the main thread; no subagents and no times
 test('cost line adds subagent totals (compacted) and elapsed minutes', () => {
   const sub = [usage(5, 5, 4000, 120000, 0)];
   const r = decideStop({ ...base, config: cfg('advisory'), subagentEntries: sub, entries: [usage(0, 82, 15363, 3157462, 41000), usage(90000, 0, 0, 0, 0)] });
-  assert.equal(r.costLine, 'nauraiz-dev · tokens this session: main out 15.4k, cache read 3.16M, cache write 41k, input 82 · subagents out 4k, cache read 120k · 2 min');
+  assert.equal(r.costLine, 'nauraiz-dev · tokens this session: main out 15.4k, cache read 3.16M, cache write 41k, input 82 · subagents out 4k, cache read 120k · 2 min wall');
 });
 
 test('subagent part is omitted when subagent output and cache read are zero', () => {
@@ -27,7 +27,7 @@ test('subagent part is omitted when subagent output and cache read are zero', ()
 
 test('elapsed shows 0 min when two timestamps round to zero, and is omitted with one', () => {
   const two = decideStop({ ...base, config: cfg('advisory'), entries: [usage(1000, 1, 1, 1, 1), usage(5000, 1, 1, 1, 1)] });
-  assert.match(two.costLine, / · 0 min$/);
+  assert.match(two.costLine, / · 0 min wall$/);
   const one = decideStop({ ...base, config: cfg('advisory'), entries: [usage(1000, 1, 1, 1, 1)] });
   assert.doesNotMatch(one.costLine, /min/);
 });
@@ -174,4 +174,21 @@ test('bookkeeping edits after the gate are not work (strict, scaffold)', () => {
   assert.equal(r.block, false);
   const work = decideStop({ ...base, cwd: 'D:/repo', config, entries: [...entries, editAt(700, 'D:/repo/src/b.js')], sessionMdMtime: 300 });
   assert.deepEqual(work.problems, [GATE_P, SESSION_P]);
+});
+
+test('cost line labels elapsed as wall time and omits it above 1440 minutes', () => {
+  const short = decideStop({ ...base, config: cfg('advisory'), entries: [usage(0, 1, 1, 1, 1), usage(24 * 60000, 1, 1, 1, 1)] });
+  assert.match(short.costLine, / · 24 min wall$/);
+  const day = decideStop({ ...base, config: cfg('advisory'), entries: [usage(0, 1, 1, 1, 1), usage(1440 * 60000, 1, 1, 1, 1)] });
+  assert.match(day.costLine, / · 1440 min wall$/);
+  const long = decideStop({ ...base, config: cfg('advisory'), entries: [usage(0, 1, 1, 1, 1), usage(1441 * 60000, 1, 1, 1, 1)] });
+  assert.doesNotMatch(long.costLine, /min/);
+});
+
+test('precomputed subagentTotals are used and a partial read is flagged', () => {
+  const subagentTotals = { input: 0, output: 4000, cacheRead: 120000, cacheWrite: 0, total: 124000 };
+  const r = decideStop({ ...base, config: cfg('advisory'), entries: [usage(1, 1, 1, 1, 1)], subagentTotals, subagentsPartial: true });
+  assert.match(r.costLine, / · subagents out 4k, cache read 120k · subagents partial$/);
+  const empty = decideStop({ ...base, config: cfg('advisory'), entries: [usage(1, 1, 1, 1, 1)], subagentsPartial: true });
+  assert.match(empty.costLine, /input 1 · subagents partial$/);
 });
