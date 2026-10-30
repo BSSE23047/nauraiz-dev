@@ -5,7 +5,8 @@
   "scopeAsk": true,
   "gate": {},
   "protectedPaths": [],
-  "models": { "small": "sonnet", "normal": "opus", "large": "opus", "review": "opus", "fix-round": "sonnet" },
+  "sharedPaths": [],
+  "models": { "small": "sonnet", "normal": "opus", "large": "opus", "review": "opus", "fix-round": "sonnet", "explore": "haiku" },
   "branch": { "base": "{{baseBranch}}", "pattern": "feature/${issue}-${slug}", "merge": "merge" },
   "plan": { "dir": "{{planDir}}", "template": null },
   "pr": { "sections": ["Summary", "Steps ↔ commits", "Gate output", "Decisions to confirm", "Risks", "Unverified"] }

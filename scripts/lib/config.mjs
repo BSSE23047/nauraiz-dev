@@ -9,13 +9,15 @@ export const DEFAULTS = Object.freeze({
   state: 'none',
   gate: {},
   protectedPaths: [],
-  models: { small: 'sonnet', normal: 'opus', large: 'opus', review: 'opus', 'fix-round': 'sonnet' },
+  sharedPaths: [],
+  models: { small: 'sonnet', normal: 'opus', large: 'opus', review: 'opus', 'fix-round': 'sonnet', explore: 'haiku' },
   branch: { base: 'main', pattern: 'feature/${issue}-${slug}', merge: 'merge' },
   plan: { dir: '.work/tasks', template: null },
   pr: { sections: ['Summary', 'Steps ↔ commits', 'Gate output', 'Decisions to confirm', 'Risks', 'Unverified'] },
 });
 
 const CONTAINER_KEYS = ['plan', 'models', 'branch', 'pr', 'gate'];
+const ARRAY_KEYS = ['protectedPaths', 'sharedPaths'];
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -51,7 +53,7 @@ function readJson(file) {
 
 /**
  * Drop wrong-shaped values from one config layer, before it is merged, so the layer below keeps its
- * value: container keys must be plain objects, protectedPaths an array. Returns a shallow copy.
+ * value: container keys must be plain objects, protectedPaths and sharedPaths arrays. Returns a shallow copy.
  */
 function validLayer(layer, name, errors) {
   const out = { ...layer };
@@ -61,32 +63,44 @@ function validLayer(layer, name, errors) {
       delete out[key];
     }
   }
-  if ('protectedPaths' in out && !Array.isArray(out.protectedPaths)) {
-    errors.push(`${name}: protectedPaths must be an array`);
-    delete out.protectedPaths;
+  for (const key of ARRAY_KEYS) {
+    if (key in out && !Array.isArray(out[key])) {
+      errors.push(`${name}: ${key} must be an array`);
+      delete out[key];
+    }
   }
   return out;
 }
 
 /**
  * Load DEFAULTS <- <cwd>/.claude/nauraiz-dev.json <- <cwd>/.claude/nauraiz-dev.local.json.
- * Only <cwd>/.claude is read (no upward walk). A missing or unparsable project file
- * yields defaults (advisory) with found=false; error is set only for unparsable files.
- * `present` is true whenever the project file exists, so callers can tell "no config" from
- * "config unreadable". A wrong-shaped value in a layer is skipped (with an error) and the layer
- * below keeps its value. A found config that sets no enforcement is guided.
+ * Only <cwd>/.claude is read (no upward walk). Returns { config, found, present, error, mode }:
+ * - mode 'project': the project file parsed (the local file, if any, is layered over it).
+ * - mode 'local': no project file, but the local file parsed; it is layered over DEFAULTS and treated
+ *   as found, with the same post-processing as a project config. `present` stays false.
+ * - mode 'none': neither file gave a config; defaults (advisory) with found=false.
+ * `present` is true only when the project file exists, so callers can tell "no config" from
+ * "config unreadable". `error` is set for an unparsable file (the project file's error wins over
+ * the local file's when both fail) and for wrong-shaped values. A wrong-shaped value in a layer is
+ * skipped (with an error) and the layer below keeps its value. A found config that sets no
+ * enforcement is guided.
  */
 export function loadConfig(cwd) {
   const dir = path.join(cwd, '.claude');
   const project = readJson(path.join(dir, 'nauraiz-dev.json'));
-  if (project.error || project.value === null) {
-    // A missing file gives { value: null } with no error, so an error here means the file exists.
-    return { config: clone(DEFAULTS), found: false, present: Boolean(project.error), error: project.error ?? null };
+  const local = readJson(path.join(dir, 'nauraiz-dev.local.json'));
+  // A missing file gives { value: null } with no error, so an error on the project file means it exists.
+  const projectPresent = Boolean(project.error) || project.value !== null;
+
+  if (project.error || (project.value === null && !local.value)) {
+    return {
+      config: clone(DEFAULTS), found: false, present: projectPresent,
+      error: project.error ?? local.error ?? null, mode: 'none',
+    };
   }
 
   const errors = [];
-  let merged = deepMerge(DEFAULTS, validLayer(project.value, 'nauraiz-dev.json', errors));
-  const local = readJson(path.join(dir, 'nauraiz-dev.local.json'));
+  let merged = deepMerge(DEFAULTS, validLayer(project.value ?? {}, 'nauraiz-dev.json', errors));
   if (local.error) errors.push(local.error);
   else if (local.value) merged = deepMerge(merged, validLayer(local.value, 'nauraiz-dev.local.json', errors));
 
@@ -98,7 +112,11 @@ export function loadConfig(cwd) {
 
   if (!merged.protectedPaths.includes('.env*')) merged.protectedPaths.push('.env*');
 
-  return { config: merged, found: true, present: true, error: errors.length ? errors.join('; ') : null };
+  return {
+    config: merged, found: true, present: project.value !== null,
+    error: errors.length ? errors.join('; ') : null,
+    mode: project.value !== null ? 'project' : 'local',
+  };
 }
 
 /** Persistent plugin state dir: CLAUDE_PLUGIN_DATA, else os.tmpdir()/nauraiz-dev. Created if missing. */

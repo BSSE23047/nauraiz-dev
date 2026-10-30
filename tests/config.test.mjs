@@ -149,3 +149,53 @@ test('a wrong-shaped value in the project file still falls back to the default',
     assert.match(r.error, /gate must be an object/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('local file alone loads as found, mode local, guided', () => {
+  const r = loadConfig(fx('local-only'));
+  assert.equal(r.found, true);
+  assert.equal(r.present, false);
+  assert.equal(r.mode, 'local');
+  assert.equal(r.error, null);
+  assert.equal(r.config.enforcement, 'guided');
+  assert.equal(r.config.gate.test, 'npm test');
+  assert.ok(r.config.protectedPaths.includes('.env*'));
+  assert.deepEqual(r.config.sharedPaths, ['src/shared/**']);
+});
+
+test('project config reports mode project', () => {
+  assert.equal(loadConfig(fx('configured')).mode, 'project');
+});
+
+test('no config reports mode none', () => {
+  const r = loadConfig(fx('empty'));
+  assert.equal(r.mode, 'none');
+  assert.equal(r.found, false);
+});
+
+test('wrong-shaped sharedPaths is dropped with an error', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-shared-'));
+  try {
+    mkdirSync(path.join(dir, '.claude'));
+    writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.json'), JSON.stringify({ sharedPaths: 'x' }));
+    const r = loadConfig(dir);
+    assert.deepEqual(r.config.sharedPaths, []);
+    assert.match(r.error, /sharedPaths must be an array/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('models.explore defaults to haiku', () => {
+  assert.equal(loadConfig(fx('configured')).config.models.explore, 'haiku');
+});
+
+test('unreadable local-only file reports the error and no config', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-local-bad-'));
+  try {
+    mkdirSync(path.join(dir, '.claude'));
+    writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.local.json'), '{oops');
+    const r = loadConfig(dir);
+    assert.equal(r.found, false);
+    assert.equal(r.present, false);
+    assert.equal(r.mode, 'none');
+    assert.match(r.error, /invalid JSON/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
