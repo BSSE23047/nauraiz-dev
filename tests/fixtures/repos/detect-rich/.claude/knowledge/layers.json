@@ -1,0 +1,1 @@
+{ "shared": ["src/api/**", "packages/common/**", 7], "sharedLayers": "not-an-array" }

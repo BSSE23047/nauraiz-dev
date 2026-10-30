@@ -1,0 +1,13 @@
+{
+  "name": "detect-rich",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest",
+    "lint": "eslint .",
+    "check": "node scripts/check.js",
+    "typecheck": "tsc --noEmit",
+    "verify:docs": "node scripts/verify-docs.js",
+    "test:e2e": "playwright test",
+    "start": "node index.js"
+  }
+}

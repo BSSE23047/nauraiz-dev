@@ -2,11 +2,13 @@
 // init detection: read a repo's manifests and .claude/ folder and print what nauraiz-dev should configure.
 // Usage: node scripts/init/detect.mjs [cwd]. Never throws: unreadable or malformed files count as absent.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { isMain } from '../lib/main.mjs';
 
 const NODE_GATE = ['build', 'test', 'lint'];
+const OFFER_WORDS = ['check', 'verify', 'typecheck', 'e2e'];
+const MAKE_TARGETS = /^(check|test|lint):(?!=)/;
 const EDIT_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -76,6 +78,74 @@ function countLines(text) {
   return lines.length;
 }
 
+/** npm scripts that look like extra checks (`npm run <name>`) plus Makefile check/test/lint targets (`make <t>`), minus `skip`. */
+function offeredGates(scripts, makefile, skip) {
+  const offered = {};
+  const taken = (name) => skip.includes(name) || name in offered;
+  for (const [name, cmd] of Object.entries(scripts)) {
+    const lower = name.toLowerCase();
+    if (name === 'test' || taken(name) || typeof cmd !== 'string' || !cmd.trim()) continue;
+    if (OFFER_WORDS.some((w) => lower.includes(w))) offered[name] = `npm run ${name}`;
+  }
+  for (const line of (makefile ?? '').split(/\r?\n/)) {
+    const target = MAKE_TARGETS.exec(line)?.[1];
+    if (target && !taken(target)) offered[target] = `make ${target}`;
+  }
+  return offered;
+}
+
+/** A one-shot replacement when `scripts.test` would watch forever, else null. */
+function oneShotTest(test) {
+  if (typeof test !== 'string') return null;
+  if (/\bvitest\b/.test(test) && !/(^|\s)(--run|run)(\s|$)/.test(test)) return 'npx vitest run';
+  if (/\bjest\s+--watch/.test(test)) return 'npx jest --watchAll=false';
+  return null;
+}
+
+/** String items of top-level `sharedLayers` / `shared` arrays in `*.json` directly under the given dirs, deduped in order. */
+function sharedPathsIn(dirs) {
+  const out = [];
+  for (const dir of dirs) {
+    let names = [];
+    try {
+      names = readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.json')).sort();
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const json = readJsonObject(path.join(dir, name));
+      if (!json) continue;
+      for (const key of ['sharedLayers', 'shared']) {
+        if (!Array.isArray(json[key])) continue;
+        for (const item of json[key]) {
+          if (typeof item === 'string' && item && !out.includes(item)) out.push(item);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** Values of the `kind:` line in the YAML frontmatter of a plan template (between the first two `---` lines). */
+function planKindsOf(text) {
+  if (text === null) return [];
+  const lines = text.split(/\r?\n/);
+  const open = lines.findIndex((l) => l.trim() === '---');
+  if (open < 0) return [];
+  const close = lines.findIndex((l, i) => i > open && l.trim() === '---');
+  if (close < 0) return [];
+  for (const line of lines.slice(open + 1, close)) {
+    const m = /^kind\s*:(.*)$/.exec(line);
+    if (!m) continue;
+    return m[1]
+      .replace(/(^|\s)#.*$/, '')
+      .split(/[|/,]/)
+      .map((k) => k.trim().replace(/^(["'])(.*)\1$/, '$2').trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
 /**
  * Detect the stack, gate commands, protected paths and existing setup of the repo at `cwd`.
  * Node (package.json) takes precedence over Flutter (pubspec.yaml) when both exist.
@@ -91,13 +161,17 @@ export function detect(cwd) {
     hasState: false,
     hasWorkTasks: false,
     baseBranch: 'main',
+    offeredGate: {},
+    testOneShot: null,
+    sharedPaths: [],
+    planKinds: [],
   };
 
   try {
     const pkg = readJsonObject(at('package.json'));
+    const scripts = pkg && isPlainObject(pkg.scripts) ? pkg.scripts : {};
     if (pkg) {
       result.stack = 'node';
-      const scripts = isPlainObject(pkg.scripts) ? pkg.scripts : {};
       for (const name of NODE_GATE) {
         if (typeof scripts[name] === 'string' && scripts[name].trim()) result.gate[name] = `npm run ${name}`;
       }
@@ -105,6 +179,11 @@ export function detect(cwd) {
       result.stack = 'flutter';
       result.gate = { analyze: 'flutter analyze', test: 'flutter test' };
     }
+
+    result.offeredGate = offeredGates(scripts, readText(at('Makefile')), Object.keys(result.gate));
+    result.testOneShot = oneShotTest(scripts.test);
+    result.sharedPaths = sharedPathsIn([at('.claude'), at('.claude', 'knowledge')]);
+    result.planKinds = planKindsOf(readText(at('.claude', 'templates', 'PLAN_TEMPLATE.md')));
 
     const owned = readJsonObject(at('.claude', 'knowledge', 'protected-paths.json'))?.frameworkOwned;
     if (Array.isArray(owned)) {
