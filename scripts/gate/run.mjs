@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../lib/main.mjs';
 import { loadConfig } from '../lib/config.mjs';
 import { resolveBase } from '../lib/base.mjs';
 import { currentBranch } from '../lib/git.mjs';
@@ -133,6 +133,6 @@ async function main() {
   process.exit(ok ? 0 : 1);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isMain(import.meta.url)) {
   main().catch((e) => { console.error(`nauraiz-dev: ${e.message}`); process.exit(1); });
 }

@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../lib/main.mjs';
 
 const MARKETPLACE_REPO = 'BSSE23047/nauraiz-dev';
 const OFFICIAL = 'claude-plugins-official';
@@ -122,7 +122,7 @@ export function check({ home = path.join(os.homedir(), '.claude'), skipClaude = 
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   let out = '{}';
   try {
     const args = process.argv.slice(2);

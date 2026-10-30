@@ -4,7 +4,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../lib/main.mjs';
 
 const NODE_GATE = ['build', 'test', 'lint'];
 const EDIT_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
@@ -128,7 +128,7 @@ export function detect(cwd) {
   return result;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   let out = '{}';
   try {
     out = JSON.stringify(detect(path.resolve(process.argv[2] || process.cwd())), null, 2);

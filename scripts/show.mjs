@@ -4,7 +4,8 @@
 // Usage: node show.mjs <path relative to the plugin root>, e.g. templates/CLAUDE.md
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMain } from './lib/main.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ALLOWED_DIRS = ['templates', 'skills'];
@@ -26,7 +27,7 @@ export function resolveShown(rel) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const file = resolveShown(process.argv[2]);
   if (!file) {
     process.stderr.write(`nauraiz-dev: no such plugin file: ${process.argv[2] ?? ''} (templates/… or skills/… only)\n`);
