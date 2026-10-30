@@ -96,6 +96,8 @@ test('no client material in templates, the init and task skills, the agents, the
   const dirs = [
     'templates', 'skills/init', 'skills/start-task', 'skills/grill', 'skills/kickoff-prompt', 'scripts/init',
     'skills/gate', 'skills/ship', 'skills/review', 'agents',
+    'skills/capture-lesson', 'skills/memory-hygiene', 'skills/find-skills', 'scripts/memory', 'tests/fixtures/memory',
+    'evals/capture-lesson-triggers', 'evals/memory-hygiene-triggers',
     'evals/start-task-triggers', 'evals/start-task-small-negative', 'evals/grill-asks-on-decisions', 'evals/kickoff-triggers',
     'evals/gate-triggers', 'evals/ship-not-model-invoked', 'evals/review-triggers',
     'tests/fixtures/repos/npm-app', 'tests/fixtures/repos/flutter-app',
@@ -372,4 +374,46 @@ test('evals for gate, ship and review exist with the expected graders', () => {
   assert.ok(r.graders.includes(skillFired('review')));
   assert.doesNotMatch(r.graders, /^max: 0$/m);
   for (const c of [g, s, r]) assert.match(c.prompt, /^---\ndescription: .+\nmax_turns: \d+\nallowed_tools: \[/);
+});
+
+test('capture-lesson, memory-hygiene and find-skills: short trigger-first descriptions, no shell beyond their script and read-only searches', () => {
+  for (const name of ['capture-lesson', 'memory-hygiene', 'find-skills']) {
+    const { fm } = taskSkill(name);
+    const description = /^description: "(.*)"$/m.exec(fm)[1];
+    assert.ok(description.length <= 200, `${name}: description is ${description.length} chars, budget is 200`);
+  }
+  const lesson = taskSkill('capture-lesson');
+  assert.match(lesson.fm, /^allowed-tools: Read Write Edit Glob Grep$/m, 'capture-lesson has no shell');
+  for (const needle of [
+    'mode=local', '.claude/nauraiz-dev.local.json', 'auto-memory only', 'Never write a', 'tracked file', '.claude/knowledge/', '.claude/rules/',
+    '<slug>', '`:`, `\\`, `/` and spaces', '*/memory/MEMORY.md', 'ask the owner for the folder', '[[file-name]]', 'MEMORY.md', '`Verified <date>:`',
+    'Incident, <date>:', 'absolute dates', 'Do not commit',
+  ]) assert.ok(lesson.body.includes(needle), `capture-lesson must mention ${needle}`);
+  const hygiene = taskSkill('memory-hygiene');
+  assert.match(hygiene.fm, /^allowed-tools: Read Edit Glob Grep Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/memory\/scan\.mjs" \*\)$/m);
+  for (const needle of [
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/memory/scan.mjs"', '.claude/knowledge', '.claude/rules', 'relativeDates', 'staleSince', 'missingRefs', 'brokenLinks',
+    'overLimit', '200 lines or 25,000 bytes', 'Propose, do not edit', '**stop**', 'Apply only the approved', '/doctor', 'contradict',
+  ]) assert.ok(hygiene.body.includes(needle), `memory-hygiene must mention ${needle}`);
+  const find = taskSkill('find-skills');
+  const tools = /^allowed-tools: (.*)$/m.exec(find.fm)[1];
+  assert.doesNotMatch(tools, /npx skills add|install|Write|Edit/, 'find-skills never installs or writes');
+  for (const needle of [
+    'npx skills find', 'gh search repos', 'offline, nothing suggested', 'at most 5', 'install command', 'listing cost', 'chars', 'Never run an install command',
+  ]) assert.ok(find.body.includes(needle), `find-skills must mention ${needle}`);
+});
+
+test('evals for capture-lesson and memory-hygiene trigger their skill', () => {
+  const evalCase = (name) => ({
+    prompt: read(`evals/${name}/prompt.md`),
+    graders: readdirSync(path.join(root, 'evals', name, 'graders')).map((f) => read(`evals/${name}/graders/${f}`)).join('\n'),
+  });
+  const skillFired = (skill) => `input_match: '"skill"\\s*:\\s*"(?:[\\w-]+:)?${skill}"'`;
+  const c = evalCase('capture-lesson-triggers');
+  assert.match(c.prompt, /^That was a gotcha, remember it for next time\.$/m);
+  assert.ok(c.graders.includes(skillFired('capture-lesson')));
+  const m = evalCase('memory-hygiene-triggers');
+  assert.match(m.prompt, /^Clean up my project memory\.$/m);
+  assert.ok(m.graders.includes(skillFired('memory-hygiene')));
+  for (const e of [c, m]) assert.match(e.prompt, /^---\ndescription: .+\nmax_turns: \d+\nallowed_tools: \[/);
 });

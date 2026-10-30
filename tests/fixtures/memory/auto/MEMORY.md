@@ -1,0 +1,2 @@
+- [Fresh](fresh.md) — nothing has changed
+- [Gone](gone.md) — this file was deleted
