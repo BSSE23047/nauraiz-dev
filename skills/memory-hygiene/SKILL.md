@@ -14,7 +14,13 @@ true. This finds the rot and proposes fixes; the owner approves each one.
 1. **Find the folders.** The project's `.claude/knowledge` and `.claude/rules` (those
    that exist), and the auto-memory folder: Glob `*/memory/MEMORY.md` in
    `<home>/.claude/projects` and take the folder named like the current directory with
-   `:`, `\`, `/` and spaces each replaced by `-`. No match: scan without it and say so.
+   every non-alphanumeric character replaced by `-`, compared case-insensitively. No match:
+   scan without it and say so.
+
+   `local` mode (the session header shows `mode=local`, or `.claude/nauraiz-dev.local.json`
+   exists and `.claude/nauraiz-dev.json` does not): edits go **only inside the auto-memory
+   folder**. For `.claude/knowledge` and `.claude/rules` list the proposals but never apply
+   them: those files are tracked.
 
 2. **Scan.** Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/memory/scan.mjs" <dir>...` with
    those folders (quote paths; add `--today <date>` only if asked). It prints JSON: per
@@ -36,9 +42,11 @@ true. This finds the rot and proposes fixes; the owner approves each one.
    - `index.overLimit`: name the entries to merge or drop to get under the limits.
    Then **stop** and ask which to apply.
 
-5. **Apply only the approved ones** with Edit. Never delete a file unless the owner
-   said to. Keep `MEMORY.md` and `knowledge/README.md` in step with every file you
-   rename or remove. Run the scan again and report the counts before and after.
+5. **Apply only the approved ones** with Edit, and in `local` mode only inside the
+   auto-memory folder. Edits stay within files: you cannot rename or delete one. When a
+   file must go or be renamed, tell the owner which, to do by hand, and keep `MEMORY.md`
+   and `knowledge/README.md` in step. Run the scan again and report the counts before and
+   after.
 
 6. If the `/doctor` command is available in this Claude Code version, mention it: it
    audits the prompt files this skill does not cover. Do not run it for the owner.

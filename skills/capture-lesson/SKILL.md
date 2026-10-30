@@ -27,9 +27,9 @@ not paid for twice. One lesson per file, facts only.
    - Else: auto-memory.
 
    Auto-memory folder: `~/.claude/projects/<slug>/memory/` under the user's home, where
-   `<slug>` is the current directory with `:`, `\`, `/` and spaces each replaced by `-`.
+   `<slug>` is the current directory with every non-alphanumeric character replaced by `-`.
    Find it with Glob on `*/memory/MEMORY.md` in `<home>/.claude/projects`, take the folder
-   whose name equals the slug. No match: ask the owner for the folder and stop.
+   whose name equals the slug, compared case-insensitively. No match: ask the owner for the folder and stop.
 
 3. **Look for an existing entry.** Grep the folder for the topic. Found: fix that file
    (replace the wrong fact, do not append a correction). Not found: one new file named

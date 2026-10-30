@@ -134,3 +134,13 @@ test('CLI: no directory is a usage error', () => {
   assert.equal(out.status, 1);
   assert.match(out.stderr, /usage/i);
 });
+
+test('index: a MEMORY.md that is not a readable file leaves index null instead of throwing', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-mem-odd-'));
+  try {
+    mkdirSync(path.join(dir, 'MEMORY.md'));
+    assert.equal(scanMemory({ dirs: [dir], today: TODAY }).index, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

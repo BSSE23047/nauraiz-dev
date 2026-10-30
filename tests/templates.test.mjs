@@ -386,21 +386,32 @@ test('capture-lesson, memory-hygiene and find-skills: short trigger-first descri
   assert.match(lesson.fm, /^allowed-tools: Read Write Edit Glob Grep$/m, 'capture-lesson has no shell');
   for (const needle of [
     'mode=local', '.claude/nauraiz-dev.local.json', 'auto-memory only', 'Never write a', 'tracked file', '.claude/knowledge/', '.claude/rules/',
-    '<slug>', '`:`, `\\`, `/` and spaces', '*/memory/MEMORY.md', 'ask the owner for the folder', '[[file-name]]', 'MEMORY.md', '`Verified <date>:`',
+    '<slug>', 'every non-alphanumeric character replaced by `-`', 'case-insensitively','*/memory/MEMORY.md', 'ask the owner for the folder', '[[file-name]]', 'MEMORY.md', '`Verified <date>:`',
     'Incident, <date>:', 'absolute dates', 'Do not commit',
   ]) assert.ok(lesson.body.includes(needle), `capture-lesson must mention ${needle}`);
   const hygiene = taskSkill('memory-hygiene');
   assert.match(hygiene.fm, /^allowed-tools: Read Edit Glob Grep Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/memory\/scan\.mjs" \*\)$/m);
   for (const needle of [
     'node "${CLAUDE_PLUGIN_ROOT}/scripts/memory/scan.mjs"', '.claude/knowledge', '.claude/rules', 'relativeDates', 'staleSince', 'missingRefs', 'brokenLinks',
-    'overLimit', '200 lines or 25,000 bytes', 'Propose, do not edit', '**stop**', 'Apply only the approved', '/doctor', 'contradict',
+    'overLimit', '200 lines or 25,000 bytes', 'mode=local', '.claude/nauraiz-dev.local.json', 'only inside the auto-memory', 'never apply',
+    'cannot rename or delete', 'by hand', 'every non-alphanumeric character replaced by `-`', 'case-insensitively', 'Propose, do not edit', '**stop**', 'Apply only the approved', '/doctor', 'contradict',
   ]) assert.ok(hygiene.body.includes(needle), `memory-hygiene must mention ${needle}`);
   const find = taskSkill('find-skills');
   const tools = /^allowed-tools: (.*)$/m.exec(find.fm)[1];
   assert.doesNotMatch(tools, /npx skills add|install|Write|Edit/, 'find-skills never installs or writes');
+  assert.ok(tools.includes('Bash(gh search code *)'));
+  assert.doesNotMatch(find.body, /gh api repos/, 'a raw read goes through the permission prompt, never a pre-approved gh api');
   for (const needle of [
     'npx skills find', 'gh search repos', 'offline, nothing suggested', 'at most 5', 'install command', 'listing cost', 'chars', 'Never run an install command',
   ]) assert.ok(find.body.includes(needle), `find-skills must mention ${needle}`);
+});
+
+test('no skill pre-approves gh api (it can mutate with the owner credentials)', () => {
+  for (const name of readdirSync(path.join(root, 'skills'))) {
+    const fm = read(`skills/${name}/SKILL.md`).split('---\n')[1];
+    const tools = /^allowed-tools: (.*)$/m.exec(fm)?.[1] ?? '';
+    assert.doesNotMatch(tools, /gh api/, `${name} must not allow gh api`);
+  }
 });
 
 test('evals for capture-lesson and memory-hygiene trigger their skill', () => {

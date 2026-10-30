@@ -1,7 +1,7 @@
 ---
 name: find-skills
 description: "Suggest installable skills for this project's stack: 'is there a skill for X', 'find skills'. Needs network, never installs. Not for writing a skill or using one already installed."
-allowed-tools: Read Glob Grep Bash(npx skills find *) Bash(gh search repos *) Bash(gh api repos/*)
+allowed-tools: Read Glob Grep Bash(npx skills find *) Bash(gh search repos *) Bash(gh search code *)
 ---
 
 # find-skills
@@ -19,14 +19,14 @@ whether or not the skill is used.
 2. **Search**, first one that works:
    - `npx skills find <query>`.
    - `gh search repos <query> skill --limit 10 --json fullName,description,url`, then
-     check a candidate holds a `SKILL.md` with
-     `gh api repos/<owner>/<repo>/contents --jq '.[].name'` (also look in a `skills`
-     folder).
+     confirm each candidate holds a skill file with
+     `gh search code --filename SKILL.md --repo <owner>/<repo>`.
    - Neither works, or no network: say **offline, nothing suggested** and stop.
 
-3. **Validate.** Drop any result whose repository you could not confirm exists. Read the
-   skill's own `description:` line (`gh api repos/<owner>/<repo>/contents/<path>/SKILL.md
-   --jq .content` is base64; decode it) and count its characters.
+3. **Validate.** Drop any result whose repository you could not confirm exists. To count
+   the skill's own `description:` line you need the raw file: `gh api` is not
+   pre-approved, so the owner is asked first. If they decline or it fails, write
+   `listing cost: unknown` for that skill. Never pass `-X`, `--method`, `-f` or `-F`.
 
 4. **Report at most 5**, best match first. Per skill: name, what it does in one line,
    the install command exactly as the source documents it (e.g.

@@ -119,7 +119,7 @@ export function scanMemory({ dirs, today, staleDays = 90 }) {
     const indexPath = path.join(dir, INDEX_NAME);
     if (!index && existsSync(indexPath)) {
       const f = files.find((x) => x.path === indexPath);
-      index = { path: indexPath, lines: f.lines, overLimit: f.lines > MAX_INDEX_LINES || f.bytes > MAX_INDEX_BYTES };
+      if (f) index = { path: indexPath, lines: f.lines, overLimit: f.lines > MAX_INDEX_LINES || f.bytes > MAX_INDEX_BYTES };
     }
   }
   return { files, index };
