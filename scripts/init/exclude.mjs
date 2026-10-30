@@ -19,6 +19,11 @@ function gitRunner(cwd) {
   };
 }
 
+/** Make a folder prefix literal in a gitignore line: backslash-escape a leading # or ! and the glob characters. */
+function escapePrefix(p) {
+  return p.replace(/[*?[\\]/g, '\\$&').replace(/^[#!]/, '\\$&');
+}
+
 function gitOut(run, args) {
   const r = run(args);
   if (r.code !== 0) throw new Error(`nauraiz-dev: not a git repository (git ${args.join(' ')}: ${String(r.stderr).trim() || `exit ${r.code}`})`);
@@ -39,7 +44,7 @@ export function addExcludes(cwd, patterns, run = gitRunner(cwd)) {
   for (const p of patterns) {
     const rel = normalize(String(p));
     if (!rel) continue;
-    const line = `${normalize(prefix)}${prefix ? '/' : ''}${rel}`;
+    const line = `${prefix ? `${escapePrefix(normalize(prefix))}/` : ''}${rel}`;
     if (!wanted.includes(line)) wanted.push(line);
   }
 

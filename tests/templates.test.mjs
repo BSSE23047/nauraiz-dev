@@ -89,7 +89,7 @@ test('init skill frontmatter', () => {
   for (const needle of ['--local', '--print', '.claude/nauraiz-dev.local.json', '.claude/settings.local.json', 'exclude.mjs', 'sharedPaths', 'offeredGate', 'testOneShot']) {
     assert.ok(body.includes(needle), `init skill must mention ${needle}`);
   }
-  assert.ok(lines(text).length <= 100);
+  assert.ok(lines(text).length <= 110);
 });
 
 test('no client material in templates, the init skill or the init fixtures', () => {

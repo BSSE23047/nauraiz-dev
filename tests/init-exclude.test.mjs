@@ -50,6 +50,25 @@ test('git actually ignores the excluded file', (t) => {
   assert.equal(git(repo, 'status', '--porcelain').trim(), '');
 });
 
+test('a prefix with # or glob characters is escaped so git still matches it literally', (t) => {
+  const repo = tmpRepo(t);
+  for (const name of ['#tmp', '[b] dir']) {
+    const sub = path.join(repo, name);
+    mkdirSync(path.join(sub, '.claude'), { recursive: true });
+    writeFileSync(path.join(sub, '.claude', 'nauraiz-dev.local.json'), '{}');
+    const r = addExcludes(sub, ['.claude/nauraiz-dev.local.json']);
+    assert.deepEqual(r.added, [`${name.replace('#', '\\#').replace('[', '\\[')}/.claude/nauraiz-dev.local.json`]);
+  }
+  assert.equal(git(repo, 'status', '--porcelain').trim(), '');
+});
+
+test('the patterns themselves are not escaped; only the prefix is', (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-excl-esc-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const run = (args) => ({ code: 0, stdout: args.includes('--show-prefix') ? '!a*/\n' : 'gitdir\n', stderr: '' });
+  assert.deepEqual(addExcludes(dir, ['*.json'], run).added, ['\\!a\\*/*.json']);
+});
+
 test('repo root cwd: pattern is unchanged; backslashes become posix', (t) => {
   const repo = tmpRepo(t);
   const r = addExcludes(repo, ['.claude\\nauraiz-dev.local.json']);
