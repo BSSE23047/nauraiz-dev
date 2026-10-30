@@ -82,7 +82,8 @@ test('init skill frontmatter', () => {
   const description = /^description: "(.*)"$/m.exec(fm)[1];
   assert.ok(description.length <= 1024);
   assert.match(fm, /^disable-model-invocation: true$/m);
-  assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/init\/detect\.mjs" \*\) Read Write Edit Glob$/m);
+  assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/init\/detect\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/show\.mjs" \*\) Read Write Edit Glob$/m);
+  assert.doesNotMatch(text.split('---\n').slice(2).join('---\n'), /Templates are in/);
   assert.ok(lines(text).length <= 80);
 });
 

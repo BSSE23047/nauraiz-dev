@@ -2,13 +2,14 @@
 name: setup
 description: "Check and fix the machine for nauraiz-dev: Node, Claude Code, superpowers installed and enabled, hooks registered once, auto-memory on; offer a user-level CLAUDE.md. Run on a new machine or when something looks off. Not a project setup (use init)."
 disable-model-invocation: true
-allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check.mjs" *) Read Write
+allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/setup/check.mjs" *) Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" *) Read Write
 ---
 
 # setup
 
-Check this machine for nauraiz-dev and offer the fixes. The user-level template is
-`${CLAUDE_PLUGIN_ROOT}/templates/user-CLAUDE.md`.
+Check this machine for nauraiz-dev and offer the fixes. Get the user-level template with
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" templates/user-CLAUDE.md`; never Read
+plugin files directly.
 
 Two limits apply to every step:
 

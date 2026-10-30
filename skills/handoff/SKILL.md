@@ -1,13 +1,15 @@
 ---
 name: handoff
 description: "Write or refresh the session handoff before stopping, compacting or switching machines: goal, done, next, open questions, files in play. Use when asked to hand off, wrap up, or when the PreCompact/Stop reminder appears. Not a commit or PR step."
-allowed-tools: Read Write Edit Glob Bash(git branch --show-current) Bash(git status --short) Bash(git log --oneline -10)
+allowed-tools: Read Write Edit Glob Bash(git branch --show-current) Bash(git status --short) Bash(git log --oneline -10) Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" *)
 ---
 
 # handoff
 
 Leave the next session (or the next machine) a record it can start from. The shape of
-`session.md` and one filled example are in `reference.md` next to this file.
+`session.md` and one filled example: run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" skills/handoff/reference.md` (never Read
+plugin files directly; a project hook may deny reads outside the repo).
 
 Rules for every step:
 

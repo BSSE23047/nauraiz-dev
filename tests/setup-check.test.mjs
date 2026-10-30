@@ -212,7 +212,7 @@ test('setup skill frontmatter, and no client material in the setup files', () =>
   assert.match(fm, /^name: setup$/m);
   assert.ok(/^description: "(.*)"$/m.exec(fm)[1].length <= 1024);
   assert.match(fm, /^disable-model-invocation: true$/m);
-  assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/setup\/check\.mjs" \*\) Read Write$/m);
+  assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/setup\/check\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/show\.mjs" \*\) Read Write$/m);
   assert.doesNotMatch(fm, /\bEdit\b/);
   const files = ['skills/setup/SKILL.md', 'scripts/setup/check.mjs', 'templates/user-CLAUDE.md', 'tests/fixtures/home/settings.json', 'tests/fixtures/home/plugins/installed_plugins.json'];
   for (const f of files) {

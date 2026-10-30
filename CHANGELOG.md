@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 — 2026-10-30
+
+- Skills read templates and references through `scripts/show.mjs` instead of reading plugin files directly. A project whose own hook denies reads outside the repo (the plugin cache is outside every repo) blocked `init` in 0.1.0.
+- `init` stops and says so when a project hook blocks a step, and offers the `extraKnownMarketplaces` entry teammates need to install the plugin from shared project settings.
+
 ## 0.1.0 — 2026-10-30
 
 Hooks (all Node `.mjs`, explicit timeouts):

@@ -2,18 +2,21 @@
 name: init
 description: "Set up nauraiz-dev in this project: detect the stack and gate commands, write .claude/nauraiz-dev.json, a CLAUDE.md under 200 lines and the memory scaffold. Use once per repo, or to re-detect. Not for day-to-day tasks."
 disable-model-invocation: true
-allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/init/detect.mjs" *) Read Write Edit Glob
+allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/init/detect.mjs" *) Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" *) Read Write Edit Glob
 ---
 
 # init
 
-Adopt nauraiz-dev in the current repo. Templates are in `${CLAUDE_PLUGIN_ROOT}/templates/`.
+Adopt nauraiz-dev in the current repo. Get each template's text with
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" templates/<name>` (e.g. `templates/CLAUDE.md`).
+Never Read plugin files directly: the project's own hooks may deny reads outside the repo.
 
-Two limits apply to every step:
+Three limits apply to every step:
 
 - Show a diff and wait for a yes before changing any file that already exists. New files
   can be written directly.
 - Touch nothing outside `.claude/`, `CLAUDE.md` and `.gitignore`.
+- If a project hook blocks a step, stop and say which; never work around it.
 
 ## Steps
 
@@ -41,6 +44,9 @@ Two limits apply to every step:
      `.claude/nauraiz-dev.local.json` as `{ "mockupRoot": "<path>" }`, never to the
      committed file.
    - Make sure `.gitignore` ignores `*.local.json`; add the line if it is missing.
+   - If `.claude/settings.json` enables `nauraiz-dev@nauraiz-dev` but has no
+     `extraKnownMarketplaces.nauraiz-dev`, propose adding it (GitHub repo
+     `BSSE23047/nauraiz-dev`) so teammates who pull the settings can install it.
 
 4. CLAUDE.md:
    - If `claudeMd.exists` is false, write `CLAUDE.md` from `templates/CLAUDE.md`.
@@ -65,11 +71,9 @@ Two limits apply to every step:
    `.claude/knowledge/README.md`, `.claude/rules/README.md`, `.claude/state/session.md`,
    `.claude/state/backlog.md`, `.claude/state/completed.md`. For `none`, create none.
 
-6. If `existingPreToolUseHook` is true, set `"scopeAsk": false` in the config and tell
-   the user why: the project already has a PreToolUse hook that sees edits, and two hooks
-   asking about the same edit means a double prompt. nauraiz-dev still denies protected
-   paths (in guided and strict); it only stops asking about edits outside the plan.
-   Otherwise leave `"scopeAsk": true`.
+6. If `existingPreToolUseHook` is true, set `"scopeAsk": false` and say why (the
+   project's own edit hook already asks; protected paths are still denied). Otherwise
+   leave `"scopeAsk": true`.
 
 7. Print every file written, changed or left alone, and anything the user should still
    fill in by hand (an empty gate, a vague description). Then tell them the next step:
