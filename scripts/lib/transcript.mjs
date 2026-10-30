@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { toRelative } from './paths.mjs';
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
@@ -48,6 +49,25 @@ export function readTranscript(file) {
     if (entry) entries.push(entry);
   }
   return entries;
+}
+
+/**
+ * Entries of every subagent transcript of a session: for `<dir>/<id>.jsonl` the files are
+ * `<dir>/<id>/subagents/agent-*.jsonl` (their `.meta.json` neighbours are ignored). No dir gives [].
+ */
+export function readSubagentEntries(transcriptPath) {
+  if (typeof transcriptPath !== 'string' || !transcriptPath.endsWith('.jsonl')) return [];
+  const dir = path.join(transcriptPath.slice(0, -'.jsonl'.length), 'subagents');
+  let names;
+  try { names = readdirSync(dir); } catch { return []; }
+  return names.filter((n) => n.endsWith('.jsonl')).sort().flatMap((n) => readTranscript(path.join(dir, n)));
+}
+
+/** Whole minutes from the first to the last timestamp; null with fewer than two timestamps. */
+export function elapsedMinutes(entries) {
+  const times = entries.map((e) => e.ts).filter((t) => t !== null);
+  if (times.length < 2) return null;
+  return Math.round((Math.max(...times) - Math.min(...times)) / 60000);
 }
 
 function maxTs(entries, pred) {

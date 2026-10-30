@@ -34,12 +34,18 @@ test('prints the cost line from the sample transcript', () => withData(async (da
   assert.match(JSON.parse(r.stdout).systemMessage, /nauraiz-dev · tokens/);
 }));
 
+test('cost line includes subagent totals and elapsed minutes from the session layout', () => withData(async (data) => {
+  const transcript = path.join(path.dirname(sample), 'session', 'sess-1.jsonl');
+  const r = await runHook('stop', { session_id: 's1', transcript_path: transcript, cwd: fx('empty') }, { CLAUDE_PLUGIN_DATA: data });
+  assert.match(JSON.parse(r.stdout).systemMessage, /main out 3k, cache read 110k, cache write 5k, input 30 · subagents out 4k, cache read 120k · 2 min/);
+}));
+
 test('garbage stdin and missing transcript never throw', () => withData(async (data) => {
   const bad = await runHook('stop', 'not json', { CLAUDE_PLUGIN_DATA: data });
   assert.equal(bad.code, 0);
   const none = await runHook('stop', { session_id: 's1', transcript_path: '/nope/missing.jsonl', cwd: fx('empty') }, { CLAUDE_PLUGIN_DATA: data });
   assert.equal(none.code, 0);
-  assert.match(JSON.parse(none.stdout).systemMessage, /tokens this session \(main thread\): output 0, cache read 0, cache write 0, input 0/);
+  assert.match(JSON.parse(none.stdout).systemMessage, /tokens this session: main out 0, cache read 0, cache write 0, input 0/);
 }));
 
 test('guided, gate ran after the last edit: no warning', () => withData(async (data) => {

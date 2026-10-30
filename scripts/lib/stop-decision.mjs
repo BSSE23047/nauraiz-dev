@@ -1,4 +1,4 @@
-import { gatePrefixes, lastEditTs, lastGateTs, tokenTotals } from './transcript.mjs';
+import { elapsedMinutes, gatePrefixes, lastEditTs, lastGateTs, tokenTotals } from './transcript.mjs';
 import { isBookkeeping } from './bookkeeping.mjs';
 
 /**
@@ -16,10 +16,14 @@ export function compact(n) {
   return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
 }
 
-export function decideStop({ config, found, entries, sessionMdMtime, warned, cwd }) {
+export function decideStop({ config, found, entries, sessionMdMtime, warned, cwd, subagentEntries = [] }) {
   const t = tokenTotals(entries);
-  const costLine = `nauraiz-dev · tokens this session (main thread): output ${compact(t.output)}, `
-    + `cache read ${compact(t.cacheRead)}, cache write ${compact(t.cacheWrite)}, input ${compact(t.input)}`;
+  const sub = tokenTotals(subagentEntries);
+  const mins = elapsedMinutes(entries);
+  const costLine = `nauraiz-dev · tokens this session: main out ${compact(t.output)}, `
+    + `cache read ${compact(t.cacheRead)}, cache write ${compact(t.cacheWrite)}, input ${compact(t.input)}`
+    + (sub.output > 0 || sub.cacheRead > 0 ? ` · subagents out ${compact(sub.output)}, cache read ${compact(sub.cacheRead)}` : '')
+    + (mins !== null ? ` · ${mins} min` : '');
 
   const editTs = lastEditTs(entries, { cwd, exclude: (rel) => isBookkeeping(rel, config, cwd) });
   const edits = editTs !== null;

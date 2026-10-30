@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { readTranscript, lastEditTs, lastGateTs, gatePrefixes, tokenTotals } from '../scripts/lib/transcript.mjs';
+import { readTranscript, readSubagentEntries, elapsedMinutes, lastEditTs, lastGateTs, gatePrefixes, tokenTotals } from '../scripts/lib/transcript.mjs';
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const sample = path.join(dir, 'transcript.sample.jsonl');
@@ -127,4 +127,26 @@ test('lastEditTs with { cwd, exclude } skips edits whose relative path is exclud
 test('gatePrefixes: a usable gate also counts a runner call, no gate stays none', () => {
   assert.deepEqual(gatePrefixes({}), []);
   assert.deepEqual(gatePrefixes({ t: 'npm test' }), ['npm test', 'scripts/gate/run.mjs']);
+});
+
+const sessionDir = path.join(dir, 'session');
+
+test('readSubagentEntries reads every subagent jsonl, ignores meta files, missing dir gives []', () => {
+  const entries = readSubagentEntries(path.join(sessionDir, 'sess-1.jsonl'));
+  assert.equal(entries.length, 2);
+  const t = tokenTotals(entries);
+  assert.equal(t.output, 4000);
+  assert.equal(t.cacheRead, 120000);
+  assert.deepEqual(readSubagentEntries(sample), []);
+  assert.deepEqual(readSubagentEntries(''), []);
+});
+
+test('elapsedMinutes rounds first-to-last timestamp to minutes, null under two timestamps', () => {
+  const at = (ts) => ({ ts, role: 'user', toolUses: [], usage: null, msgId: null });
+  assert.equal(elapsedMinutes([at(0), at(90000)]), 2);
+  assert.equal(elapsedMinutes([at(0), at(10000)]), 0);
+  assert.equal(elapsedMinutes([at(90000), at(null), at(0)]), 2);
+  assert.equal(elapsedMinutes([at(5)]), null);
+  assert.equal(elapsedMinutes([at(null), at(null)]), null);
+  assert.equal(elapsedMinutes([]), null);
 });

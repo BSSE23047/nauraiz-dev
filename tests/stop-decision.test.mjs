@@ -9,9 +9,27 @@ const bash = (ts, command) => ({ ts, role: 'assistant', toolUses: [{ name: 'Bash
 const usage = (ts, i, o, cr, cw) => ({ ts, role: 'assistant', toolUses: [], usage: { input: i, output: o, cacheRead: cr, cacheWrite: cw }, msgId: null });
 const base = { found: true, sessionMdMtime: null, warned: [] };
 
-test('cost line names every total, main thread only', () => {
+test('cost line names every total for the main thread; no subagents and no timestamps leave those parts out', () => {
   const r = decideStop({ ...base, config: cfg('advisory'), entries: [usage(1, 82, 15363, 3157462, 41000)] });
-  assert.equal(r.costLine, 'nauraiz-dev · tokens this session (main thread): output 15.4k, cache read 3.16M, cache write 41k, input 82');
+  assert.equal(r.costLine, 'nauraiz-dev · tokens this session: main out 15.4k, cache read 3.16M, cache write 41k, input 82');
+});
+
+test('cost line adds subagent totals (compacted) and elapsed minutes', () => {
+  const sub = [usage(5, 5, 4000, 120000, 0)];
+  const r = decideStop({ ...base, config: cfg('advisory'), subagentEntries: sub, entries: [usage(0, 82, 15363, 3157462, 41000), usage(90000, 0, 0, 0, 0)] });
+  assert.equal(r.costLine, 'nauraiz-dev · tokens this session: main out 15.4k, cache read 3.16M, cache write 41k, input 82 · subagents out 4k, cache read 120k · 2 min');
+});
+
+test('subagent part is omitted when subagent output and cache read are zero', () => {
+  const r = decideStop({ ...base, config: cfg('advisory'), subagentEntries: [usage(5, 9, 0, 0, 7)], entries: [usage(1, 1, 1, 1, 1)] });
+  assert.doesNotMatch(r.costLine, /subagents/);
+});
+
+test('elapsed shows 0 min when two timestamps round to zero, and is omitted with one', () => {
+  const two = decideStop({ ...base, config: cfg('advisory'), entries: [usage(1000, 1, 1, 1, 1), usage(5000, 1, 1, 1, 1)] });
+  assert.match(two.costLine, / · 0 min$/);
+  const one = decideStop({ ...base, config: cfg('advisory'), entries: [usage(1000, 1, 1, 1, 1)] });
+  assert.doesNotMatch(one.costLine, /min/);
 });
 
 test('compact numbers', () => {

@@ -5,7 +5,7 @@ import { statSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../lib/config.mjs';
 import { readStdinJson } from '../lib/stdin.mjs';
-import { readTranscript } from '../lib/transcript.mjs';
+import { readSubagentEntries, readTranscript } from '../lib/transcript.mjs';
 import { decideStop } from '../lib/stop-decision.mjs';
 import { sessionStore } from '../lib/session-store.mjs';
 
@@ -20,6 +20,7 @@ async function main() {
 
   const { config, found } = loadConfig(cwd);
   const entries = transcript ? readTranscript(transcript) : [];
+  const subagentEntries = transcript ? readSubagentEntries(transcript) : [];
 
   let sessionMdMtime = null;
   if (found && config.state === 'scaffold') {
@@ -37,6 +38,7 @@ async function main() {
     config,
     found,
     entries,
+    subagentEntries,
     sessionMdMtime,
     warned: store.get().warned,
     cwd,
