@@ -47,6 +47,6 @@ plugin files directly), keep its guard block first, and fill every `{{…}}`; no
 
 ## Output
 
-Print the prompt in one fenced block, ready to paste. Under it, one line naming the model
-and the budget, and one line: "Before pasting: check out `<branch>` in `<absPath>`" (the
+Print the prompt in one fenced block, ready to paste. Under it, print
+one line naming the model and the budget, and one line: "Before pasting: check out `<branch>` in `<absPath>`" (the
 guard stops the run on any other branch or directory). Write no file unless asked.

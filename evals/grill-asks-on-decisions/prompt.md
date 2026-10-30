@@ -5,9 +5,9 @@ allowed_tools: [Read, Glob, Grep, Skill, AskUserQuestion]
 tags: [grill, must-ask]
 ---
 
-Work on this issue. `gh` is not available here, so this is the full text:
+Work on this task. There is no GitHub issue; the task is described here in full:
 
-# #31 Export the order list
+# Export the order list
 
 Add an "Export" button to the orders page that downloads the visible orders.
 

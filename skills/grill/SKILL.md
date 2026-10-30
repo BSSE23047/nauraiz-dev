@@ -29,25 +29,26 @@ nothing material is open, say "No questions: <one-line reason>" and return.
   if guessed wrong.
 - Each question gives the options, your recommendation, and the cost if the recommendation
   is wrong (what would have to be redone).
-- Use `AskUserQuestion` when it is available: one call, multiple choice, the
-  recommended option first and labelled "(Recommended)". Otherwise ask in plain text,
-  numbered, and end your turn to wait.
+- Ask with `AskUserQuestion`: one call, multiple choice, the recommended option first and
+  labelled "(Recommended)". If it is unavailable, errors, or returns no answer, follow the
+  headless rule below.
 - An approval question asks for the approval itself. Record it only on a yes, with the date
   and the owner's words; otherwise it stays `pending owner confirmation`.
-- Write each answer into the plan's "Decisions to confirm" as decided, quoting the owner.
-  Questions without an answer keep the recommendation and stay open there.
+- The owner's answers are decisions: hold them until step 8 writes the plan (start-task),
+  which puts them under `## Decisions` with the date and the owner's words. "Decisions to
+  confirm" is only for choices the owner did not state.
 
 ## Headless: no human to answer
 
 You are headless when the request says the run is unattended, headless or
-non-interactive (for example `claude -p`), or `AskUserQuestion` is not available. Then do
-not ask and do not wait: write each question with its recommended answer under
-"Decisions to confirm" in the plan (in the reply if there is no plan yet), and proceed on
-the recommendation. A recommendation is never recorded as the owner's decision or
-approval.
+non-interactive (for example `claude -p`), or `AskUserQuestion` is not available, errors
+or returns no answer. Then do not ask and do not wait: write each question with its
+recommended answer under "Decisions to confirm" in the plan (in the reply if there is no
+plan yet), and proceed on the recommendation. A recommendation is never recorded as the
+owner's decision or approval.
 
 ## After the round
 
 - Play back in two to four lines what will be built, with the answers.
-- Large tasks: go on to `superpowers:brainstorming` (Skill tool) with the answers. Normal
-  tasks go straight to the plan.
+- Hand back to `start-task`: it runs the next phase it routed (the Design phase for large
+  tasks, the plan for normal ones). Called on its own, stop after the play-back.
