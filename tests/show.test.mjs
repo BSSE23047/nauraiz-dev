@@ -34,3 +34,11 @@ test('agents/ is an allowed dir: a missing agent file is null, not an error', ()
   assert.equal(resolveShown('agents/x'), null);
   assert.equal(resolveShown('agents/../package.json'), null);
 });
+
+test('an existing agent file resolves to its real path and prints', () => {
+  const real = resolveShown('agents/reviewer.md');
+  assert.ok(real, 'agents/reviewer.md must resolve');
+  assert.equal(path.basename(real), 'reviewer.md');
+  const out = execFileSync('node', [script, 'agents/reviewer.md'], { encoding: 'utf8' });
+  assert.match(out, /^name: reviewer$/m);
+});

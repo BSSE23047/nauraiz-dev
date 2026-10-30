@@ -92,10 +92,12 @@ test('init skill frontmatter', () => {
   assert.ok(lines(text).length <= 110);
 });
 
-test('no client material in templates, the init and task skills, their evals or the init fixtures', () => {
+test('no client material in templates, the init and task skills, the agents, their evals or the init fixtures', () => {
   const dirs = [
     'templates', 'skills/init', 'skills/start-task', 'skills/grill', 'skills/kickoff-prompt', 'scripts/init',
+    'skills/gate', 'skills/ship', 'skills/review', 'agents',
     'evals/start-task-triggers', 'evals/start-task-small-negative', 'evals/grill-asks-on-decisions', 'evals/kickoff-triggers',
+    'evals/gate-triggers', 'evals/ship-not-model-invoked', 'evals/review-triggers',
     'tests/fixtures/repos/npm-app', 'tests/fixtures/repos/flutter-app',
   ];
   const files = [];
@@ -221,4 +223,128 @@ test('evals for start-task, grill and kickoff-prompt exist with the expected gra
   assert.match(k.prompt, /^write a kickoff prompt for issue 12/m);
   assert.ok(k.graders.includes(skillFired('kickoff-prompt')));
   for (const c of [t, n, g, k]) assert.match(c.prompt, /^---\ndescription: .+\nmax_turns: \d+\nallowed_tools: \[/);
+});
+
+const GATE_CMD = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"';
+const RUN_GATE_TOOL = 'Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" *)';
+
+/** Check each numbered step `N. **Title.**` appears, in order. */
+function stepsInOrder(body, names) {
+  let at = -1;
+  names.forEach((s, i) => {
+    const next = body.indexOf(`\n${i + 1}. **${s}.**`);
+    assert.ok(next > at, `step ${i + 1} "${s}" missing or out of order`);
+    at = next;
+  });
+}
+
+test('gate skill: one runner call, exit codes 0/1/2, paste the output, no re-run by hand, init on exit 2', () => {
+  const { fm, body } = taskSkill('gate');
+  const tools = /^allowed-tools: (.*)$/m.exec(fm)?.[1] ?? '';
+  assert.ok(tools.includes(RUN_GATE_TOOL), 'gate pre-approves the runner');
+  for (const needle of [
+    GATE_CMD, '--plan <path>', '--only', '`0`', '`1`', '`2`', 'no gate is configured', '/nauraiz-dev:init',
+    'no plan for this branch (pass --plan)', 'exit 0 but', 'verbatim', 'Never re-run', 'unless the runner reported',
+    'never the gate result',
+  ]) assert.ok(body.includes(needle), `gate must mention ${needle}`);
+  assert.doesNotMatch(body, /scripts\\gate/, 'forward slashes only: the Stop hook looks for scripts/gate/run.mjs');
+});
+
+test('ship skill: user-only, the seven steps in order, approvals panel, PR body source, never force or merge', () => {
+  const text = read('skills/ship/SKILL.md');
+  const fm = text.split('---\n')[1];
+  const body = text.split('---\n').slice(2).join('---\n');
+  assert.match(fm, /^name: ship$/m);
+  assert.match(fm, /^disable-model-invocation: true$/m);
+  const description = /^description: "(.*)"$/m.exec(fm)?.[1];
+  assert.ok(description && description.length <= 300, `description ${description?.length}`);
+  assert.match(description, /\bNot for\b/);
+  const tools = /^allowed-tools: (.*)$/m.exec(fm)?.[1] ?? '';
+  for (const t of [RUN_GATE_TOOL, 'Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/task/collision.mjs" *)', 'Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" *)']) {
+    assert.ok(tools.includes(t), `ship pre-approves ${t}`);
+  }
+  assert.doesNotMatch(tools, /git push|gh pr create|gh pr merge|git rebase/, 'writes to the remote or history are never pre-approved');
+  assert.ok(lines(text).length <= 90, `${lines(text).length} lines`);
+  stepsInOrder(body, ['Collision check', 'Base', 'Gate', 'Approvals', 'Plan commit', 'PR body', 'Push and open']);
+  for (const needle of [
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/task/collision.mjs"', '`taken`', '`unknown`', 'git fetch', 'git rebase origin/<base>',
+    'git rebase --abort', 'force push', GATE_CMD, '`pending owner confirmation`', 'AskUserQuestion', '"Keep as given"', '"Set to pending"',
+    'Headless', 'set every one to `pending owner confirmation`', 'Never choose for the owner',
+    'git ls-tree -r --name-only origin/<base>', 'local mode',
+    'gh pr list --state merged --author @me --limit 1 --json number', 'gh pr view <n> --json body', '`pr.sections`',
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" templates/PR_TEMPLATE.md', 'verbatim', '## Not verified', 'attribution',
+    'git rev-parse --git-path', 'gh pr create', '--body-file', 'Never `--force`', 'never merge', 'do not ask again',
+  ]) assert.ok(body.includes(needle), `ship must mention ${needle}`);
+});
+
+test('review skill: two modes, reviewer agent on a diff file, gate in a temp worktree, never Approved, merge only on "merge"', () => {
+  const { fm, body } = taskSkill('review');
+  const description = /^description: "(.*)"$/m.exec(fm)[1];
+  assert.match(description, /\/nauraiz-dev:ship/, 'points push/PR requests at the user-only ship command');
+  const tools = /^allowed-tools: (.*)$/m.exec(fm)?.[1] ?? '';
+  assert.ok(tools.includes(RUN_GATE_TOOL));
+  assert.doesNotMatch(tools, /gh pr merge|git checkout|gh pr checkout/, 'merging and checkouts are never pre-approved');
+  for (const needle of [
+    '## Branch mode', '## PR mode', '`nauraiz-dev:reviewer`', 'models.review', 'git diff origin/<base>...HEAD >',
+    'git rev-parse --git-path', 'Never paste a diff', GATE_CMD, 'gh pr diff <n> >', 'git fetch origin pull/<n>/head',
+    'git worktree add --detach', '--cwd', 'git worktree remove --force', 'even when a step failed', '/code-review',
+    '"Approved"', 'says "merge"', 'branch.merge', 'gh pr merge <n>', 'kickoff-prompt', 'After a merge only',
+    'git branch --show-current', 'gh pr checkout',
+  ]) assert.ok(body.includes(needle), `review must mention ${needle}`);
+});
+
+/** Frontmatter of an agent file as a key -> raw value map, and its body. */
+function agent(name) {
+  const text = read(`agents/${name}.md`);
+  const parts = text.split('---\n');
+  assert.equal(parts[0], '', `${name}: starts with frontmatter`);
+  const fm = Object.fromEntries(parts[1].trim().split('\n').map((l) => {
+    const i = l.indexOf(':');
+    return [l.slice(0, i), l.slice(i + 1).trim()];
+  }));
+  return { fm, body: parts.slice(2).join('---\n') };
+}
+
+test('implementer agent: sonnet, edit tools, TDD and verification skills, one task, never pushes', () => {
+  const { fm, body } = agent('implementer');
+  assert.equal(fm.name, 'implementer');
+  assert.ok(fm.description && fm.description.length <= 300);
+  assert.equal(fm.model, 'sonnet');
+  assert.equal(fm.tools, 'Read, Grep, Glob, Edit, Write, Bash');
+  assert.equal(fm.skills, '[superpowers:test-driven-development, superpowers:verification-before-completion]');
+  for (const needle of ['one task', '### Allowed', 'failing test', '`pending owner confirmation`', 'Never push', 'Status']) {
+    assert.ok(body.includes(needle), `implementer must mention ${needle}`);
+  }
+});
+
+test('reviewer agent: opus, read-only tools, reads the diff file, ranked review notes, never edits', () => {
+  const { fm, body } = agent('reviewer');
+  assert.equal(fm.name, 'reviewer');
+  assert.ok(fm.description && fm.description.length <= 300);
+  assert.equal(fm.model, 'opus');
+  assert.equal(fm.tools, 'Read, Grep, Glob, Bash');
+  for (const needle of ['diff file', 'Critical', 'Important', 'Minor', 'review notes', 'Never edit', '"Approved"', 'file:line']) {
+    assert.ok(body.includes(needle), `reviewer must mention ${needle}`);
+  }
+});
+
+test('evals for gate, ship and review exist with the expected graders', () => {
+  const evalCase = (name) => ({
+    prompt: read(`evals/${name}/prompt.md`),
+    graders: readdirSync(path.join(root, 'evals', name, 'graders')).map((f) => read(`evals/${name}/graders/${f}`)).join('\n'),
+  });
+  const skillFired = (skill) => `input_match: '"skill"\\s*:\\s*"(?:[\\w-]+:)?${skill}"'`;
+  const g = evalCase('gate-triggers');
+  assert.ok(g.graders.includes(skillFired('gate')));
+  assert.doesNotMatch(g.graders, /^max: 0$/m);
+  const s = evalCase('ship-not-model-invoked');
+  assert.match(s.prompt, /open a PR/);
+  assert.ok(s.graders.includes(skillFired('ship')));
+  assert.match(s.graders, /^max: 0$/m);
+  assert.match(s.graders, /^type: llm$/m);
+  assert.match(s.graders, /\/nauraiz-dev:ship/);
+  const r = evalCase('review-triggers');
+  assert.ok(r.graders.includes(skillFired('review')));
+  assert.doesNotMatch(r.graders, /^max: 0$/m);
+  for (const c of [g, s, r]) assert.match(c.prompt, /^---\ndescription: .+\nmax_turns: \d+\nallowed_tools: \[/);
 });
