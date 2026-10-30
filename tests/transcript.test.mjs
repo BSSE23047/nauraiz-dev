@@ -105,7 +105,7 @@ test('lastGateTs counts any tool whose input.command is a string (PowerShell on 
 });
 
 test('gatePrefixes: usable text before ${, trimmed, empty ones dropped', () => {
-  assert.deepEqual(gatePrefixes({ a: 'npm test', b: 'npm run build ${path}', c: '${all}', d: '  ', e: 5 }), ['npm test', 'npm run build']);
+  assert.deepEqual(gatePrefixes({ a: 'npm test', b: 'npm run build ${path}', c: '${all}', d: '  ', e: 5 }), ['npm test', 'npm run build', 'scripts/gate/run.mjs']);
   assert.deepEqual(gatePrefixes(undefined), []);
   assert.deepEqual(gatePrefixes({ x: '${cmd} --flag' }), []);
 });
@@ -122,4 +122,9 @@ test('lastEditTs with { cwd, exclude } skips edits whose relative path is exclud
   assert.equal(lastEditTs(entries, { cwd: 'D:/repo', exclude }), 100);
   assert.equal(lastEditTs(entries), 400, 'the old signature still counts every edit');
   assert.equal(lastEditTs([ed(500, 'Edit', {})], { cwd: 'D:/repo', exclude: () => true }), 500, 'an edit with no path still counts');
+});
+
+test('gatePrefixes: a usable gate also counts a runner call, no gate stays none', () => {
+  assert.deepEqual(gatePrefixes({}), []);
+  assert.deepEqual(gatePrefixes({ t: 'npm test' }), ['npm test', 'scripts/gate/run.mjs']);
 });

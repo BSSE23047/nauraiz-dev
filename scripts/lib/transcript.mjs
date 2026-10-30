@@ -76,12 +76,14 @@ export function lastEditTs(entries, { cwd, exclude } = {}) {
 /**
  * The usable gate prefixes: each string gate value cut at its first `${`, trimmed; empty ones dropped.
  * A gate with no usable prefix cannot be detected in a transcript, so it counts as no gate.
+ * When there is a gate, a call of the gate runner counts too (it runs the same commands).
  */
 export function gatePrefixes(gate) {
-  return Object.values(gate ?? {})
+  const prefixes = Object.values(gate ?? {})
     .filter((v) => typeof v === 'string')
     .map((v) => v.split('${')[0].trim())
     .filter(Boolean);
+  return prefixes.length ? [...prefixes, 'scripts/gate/run.mjs'] : prefixes;
 }
 
 /**
