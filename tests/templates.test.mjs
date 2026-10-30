@@ -245,7 +245,7 @@ test('gate skill: one runner call, exit codes 0/1/2, paste the output, no re-run
   for (const needle of [
     GATE_CMD, '--plan <path>', '--only', '`0`', '`1`', '`2`', 'no gate is configured', '/nauraiz-dev:init',
     'no plan for this branch (pass --plan)', 'exit 0 but', 'verbatim', 'Never re-run', 'unless the runner reported',
-    'never the gate result',
+    'never the gate result', '`nauraiz-dev:`', 'config failed to load',
   ]) assert.ok(body.includes(needle), `gate must mention ${needle}`);
   assert.doesNotMatch(body, /scripts\\gate/, 'forward slashes only: the Stop hook looks for scripts/gate/run.mjs');
 });
@@ -265,7 +265,18 @@ test('ship skill: user-only, the seven steps in order, approvals panel, PR body 
   }
   assert.doesNotMatch(tools, /git push|gh pr create|gh pr merge|git rebase/, 'writes to the remote or history are never pre-approved');
   assert.ok(lines(text).length <= 90, `${lines(text).length} lines`);
-  stepsInOrder(body, ['Collision check', 'Base', 'Gate', 'Approvals', 'Plan commit', 'PR body', 'Push and open']);
+  // The plan commit comes before the gate, so the pushed HEAD is the gated HEAD without a history rewrite.
+  stepsInOrder(body, ['Collision check', 'Base', 'Approvals', 'Plan commit', 'Gate', 'PR body', 'Push and open']);
+  for (const needle of [
+    "git log --format='%an <%ae>' origin/<base>..origin/<branch>", 'git config user.name', 'git config user.email',
+    'git status --porcelain --untracked-files=no', 'commit or stash', 'refuses to start', 'gated HEAD',
+    'git ls-files', '`nauraiz-dev:`', 'config failed to load', 'never offer to ship without a gate',
+    'gh pr view <branch> --json url,state', 'instead of `gh pr create`',
+  ]) assert.ok(body.includes(needle), `ship must mention ${needle}`);
+  assert.doesNotMatch(body, /which to keep/, 'ship never rewrites history to drop commits');
+  assert.doesNotMatch(body, /For each section/, 'the PR template is shown once');
+  assert.equal(body.split('scripts/show.mjs').length - 1, 1, 'show.mjs runs once');
+  for (const t of ['Bash(git config user.name)', 'Bash(git config user.email)']) assert.ok(tools.includes(t), `ship pre-approves ${t}`);
   for (const needle of [
     'node "${CLAUDE_PLUGIN_ROOT}/scripts/task/collision.mjs"', '`taken`', '`unknown`', 'git fetch', 'git rebase origin/<base>',
     'git rebase --abort', 'force push', GATE_CMD, '`pending owner confirmation`', 'AskUserQuestion', '"Keep as given"', '"Set to pending"',
@@ -284,6 +295,14 @@ test('review skill: two modes, reviewer agent on a diff file, gate in a temp wor
   const tools = /^allowed-tools: (.*)$/m.exec(fm)?.[1] ?? '';
   assert.ok(tools.includes(RUN_GATE_TOOL));
   assert.doesNotMatch(tools, /gh pr merge|git checkout|gh pr checkout/, 'merging and checkouts are never pre-approved');
+  for (const t of ['Bash(git worktree add --detach *)', 'Bash(git worktree list*)']) assert.ok(tools.includes(t), `review pre-approves ${t}`);
+  assert.doesNotMatch(tools, /Bash\(git worktree \*\)|git worktree remove/, 'removing a worktree is never pre-approved');
+  for (const needle of [
+    "require('os').tmpdir()", '-review-<n>-<random>', 'never relative to', 'must not exist', 'the exact `<wt>` this run created',
+    'isCrossRepository', 'package.json scripts', 'gate result includes uncommitted changes',
+    '`sonnet`, `opus` or `haiku`', 'Dispatch only after the diff file is written',
+  ]) assert.ok(body.includes(needle), `review must mention ${needle}`);
+  assert.doesNotMatch(body, /\.\.\/<this folder/, 'the worktree is never relative to the checkout');
   for (const needle of [
     '## Branch mode', '## PR mode', '`nauraiz-dev:reviewer`', 'models.review', 'git diff origin/<base>...HEAD >',
     'git rev-parse --git-path', 'Never paste a diff', GATE_CMD, 'gh pr diff <n> >', 'git fetch origin pull/<n>/head',
@@ -322,10 +341,11 @@ test('reviewer agent: opus, read-only tools, reads the diff file, ranked review 
   assert.equal(fm.name, 'reviewer');
   assert.ok(fm.description && fm.description.length <= 300);
   assert.equal(fm.model, 'opus');
-  assert.equal(fm.tools, 'Read, Grep, Glob, Bash');
+  assert.equal(fm.tools, 'Read, Grep, Glob', 'R8: no Bash, the reviewer works from the diff file');
   for (const needle of ['diff file', 'Critical', 'Important', 'Minor', 'review notes', 'Never edit', '"Approved"', 'file:line']) {
     assert.ok(body.includes(needle), `reviewer must mention ${needle}`);
   }
+  assert.doesNotMatch(body, /\bBash\b|git (log|show|blame|grep)/, 'the reviewer has no shell');
 });
 
 test('evals for gate, ship and review exist with the expected graders', () => {

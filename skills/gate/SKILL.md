@@ -21,8 +21,10 @@ not a summary line.
    - `1`: at least one failed: a non-zero exit, or `exit 0 but output reports failures`.
      A row failed with `no plan for this branch (pass --plan)` was not run: if a plan for
      this task exists, run again with `--plan <path>`; otherwise report it failed.
-   - `2`: no gate is configured. Say so, point to `/nauraiz-dev:init` (it detects the
-     gate commands), and stop.
+   - `2`: quote every `nauraiz-dev:` line it printed first. If any line other than
+     `no gate configured …` names a config file, the config failed to load: say the file
+     needs fixing, not that there is no gate, and stop. Otherwise no gate is configured:
+     say so, point to `/nauraiz-dev:init` (it detects the gate commands), and stop.
 3. Paste the runner's output verbatim (the table and every block), then one line:
    `Gate: pass` or `Gate: FAIL (<names>)`.
 4. Never re-run a gate command by hand, pipe it or grep it, unless the runner reported

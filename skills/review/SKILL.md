@@ -1,7 +1,7 @@
 ---
 name: review
 description: "Review code before or in a PR: 'review my branch', 'check this before the PR', 'review PR #12'. Runs the reviewer agent on the diff and the gate; writes review notes, never an approval. Not for pushing or opening a PR (that is /nauraiz-dev:ship) or fixing findings."
-allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" *) Bash(git fetch *) Bash(git diff *) Bash(git rev-parse *) Bash(git status *) Bash(git branch --show-current) Bash(git worktree *) Bash(gh pr view *) Bash(gh pr diff *) Read Glob Grep
+allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" *) Bash(git fetch *) Bash(git diff *) Bash(git rev-parse *) Bash(git status *) Bash(git branch --show-current) Bash(git worktree add --detach *) Bash(git worktree list*) Bash(gh pr view *) Bash(gh pr diff *) Read Glob Grep
 ---
 
 # review
@@ -23,39 +23,46 @@ Rules for both modes:
   `git stash`, no edits. Note `git branch --show-current` first; it must match at the end.
 - Merge only when the owner says "merge" in this session.
 
-Reviewer: the Agent tool with `subagent_type` `nauraiz-dev:reviewer`, `model` set to
-`models.review` when configured. Its prompt: the diff file path, the base, the plan path
-and issue if any, and for a PR its title and body. It returns findings by severity.
+Reviewer: the Agent tool with `subagent_type` `nauraiz-dev:reviewer`. Pass `model` only
+when `models.review` is `sonnet`, `opus` or `haiku`; otherwise leave it out (the agent's
+own model). Dispatch only after the diff file is written. Its prompt: the diff file
+path, the base, the plan path and issue if any, and for a PR its title and body. It has
+no shell and works from the diff file; it returns findings by severity.
 
 ## Branch mode
 
-1. `git fetch origin <base>`. If `git status --short` lists changes, say they are not
-   in the review.
+1. `git fetch origin <base>`. If `git status --short` lists changes, say they are not in
+   the diff review, and that the gate result includes uncommitted changes.
 2. Diff file: `<diff>` is what `git rev-parse --git-path nauraiz-dev-review.diff` prints.
    Run `git diff origin/<base>...HEAD > "<diff>"`. Empty: say "Nothing to review against
    origin/<base>" and stop.
 3. Dispatch the reviewer on `<diff>`. Meanwhile run
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"` (exit 2: say no gate is configured).
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"` (exit 2: as the `gate` skill says).
 4. Report: the findings ranked by severity, the gate output verbatim, what was not
    checked. End with what to fix before `/nauraiz-dev:ship`, or "No blocking findings".
    Do not fix anything unless the owner asks. Stop.
 
 ## PR mode
 
-1. `gh pr view <n> --json number,title,body,author,baseRefName,headRefName,closingIssuesReferences`.
+1. `gh pr view <n> --json number,title,body,author,baseRefName,headRefName,isCrossRepository,closingIssuesReferences`.
 2. `<diff>` from `git rev-parse --git-path nauraiz-dev-pr-<n>.diff`; run
    `gh pr diff <n> > "<diff>"`. Dispatch the reviewer on it.
-3. Gate on the PR head, outside the owner's checkout:
-   - `git fetch origin pull/<n>/head`, then
-     `git worktree add --detach "<wt>" FETCH_HEAD`, where `<wt>` is
-     `../<this folder's name>-review-<n>` (quoted: paths may have spaces).
+3. Gate on the PR head, in a temporary worktree outside the repo:
+   - `<tmp>` is what `node -e "console.log(require('os').tmpdir())"` prints. `<wt>` is
+     `<tmp>/<repo>-review-<n>-<random>` (`<repo>` this folder's name, `<random>` six
+     hex characters you pick), never relative to the current folder. Quote it.
+   - `<wt>` must not exist (`git worktree list` and the file system); if it does, stop.
+   - `git fetch origin pull/<n>/head`, then `git worktree add --detach "<wt>" FETCH_HEAD`.
    - Copy this checkout's `.claude/nauraiz-dev.json` and `.claude/nauraiz-dev.local.json`
-     (those that exist) into `<wt>/.claude/`, so the PR cannot change which commands run.
-     Install dependencies in `<wt>` if the gate needs them (`npm ci`, `flutter pub get`).
+     (those that exist) into `<wt>/.claude/`. The gate commands are then the owner's,
+     but the PR still controls what they run (package.json scripts, tests, build files).
+   - If the gate needs dependencies, install them in `<wt>` (`npm ci`, `flutter pub get`).
+     When `isCrossRepository` is true, first warn that installing and the gate run the
+     fork's code, and ask.
    - `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" --cwd "<wt>"`; add
      `--plan "<wt>/<plan>"` if the PR carries a plan for `headRefName`.
-   - Then `git worktree remove --force "<wt>"` and `git worktree prune`,
-     even when a step failed.
+   - Then `git worktree remove --force "<wt>"` with the exact `<wt>` this run created,
+     never another path, and `git worktree prune`, even when a step failed.
 4. If the `/code-review` skill is available, run it on PR `<n>` (no `--comment`).
 5. Review notes: the reviewer's and `/code-review`'s findings merged and ranked by
    severity, the gate output verbatim, what was not verified. Post them on the PR
