@@ -35,9 +35,9 @@ Rules for every step:
    `git log --format='%an <%ae>' origin/<base>..origin/<branch>`. If any author matches
    neither `git config user.name` nor `git config user.email`, stop and name them.
 
-2. **Base.** If `git status --porcelain --untracked-files=no` prints anything, stop and
-   ask the owner to commit or stash it: the gate runs on the working tree, but the push
-   sends HEAD. Then `git rev-list --count HEAD..origin/<base>`. If 0, go on. Otherwise
+2. **Base.** If `git status --porcelain --untracked-files=no`, leaving out the plan file
+   (step 4 commits it), prints anything, stop and ask the owner to commit or stash it:
+   the gate runs on the working tree, but the push sends HEAD. Then `git rev-list --count HEAD..origin/<base>`. If 0, go on. Otherwise
    read `git log --oneline origin/<base>..HEAD`:
    - Branch already on origin: rebasing would need a force push. Stop; say how far behind
      it is and ask: merge `origin/<base>` into it, or ship as it is.
@@ -53,17 +53,20 @@ Rules for every step:
    `AskUserQuestion` is unavailable, errors or returns no answer):
    set every one to `pending owner confirmation`. Never choose for the owner.
 
-4. **Plan commit.** Commit the plan, with any step-3 change, as its own commit
-   (`docs: plan for #<issue>`) when it is already tracked (`git ls-files <plan>` prints it)
-   or the project commits plans (`git ls-tree -r --name-only origin/<base> -- <plan.dir>`
-   lists a file). Never commit an untracked plan in local mode. It comes before the gate,
-   so the pushed HEAD is the gated HEAD with no history rewrite.
+4. **Plan commit.** Commit the plan as its own commit (`docs: plan for #<issue>`; no
+   issue: `docs: plan for <branch>`) when `git status --porcelain -- <plan>` shows a change
+   and it is tracked (`git ls-files <plan>` prints it) or the project commits plans
+   (`git ls-tree -r --name-only origin/<base> -- <plan.dir>` lists a file). Never commit an
+   untracked plan in local mode. Committing before the gate makes the pushed HEAD the
+   gated HEAD with no rewrite. That covers tracked files only:
+   an untracked file the gate reads is not pushed; tell the owner to add it or ignore it.
 
 5. **Gate.** Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" --plan <plan>` (no plan:
    drop `--plan`). Exit 1: stop and paste the output. Exit 2: quote every `nauraiz-dev:`
    line first. A line other than `no gate configured …` that names a config file means
    the config failed to load: stop, say it needs fixing, and never offer to ship without a gate.
-   Otherwise ask "No gate configured. Ship without one?". Keep the output for step 6.
+   Otherwise ask "No gate configured. Ship without one?". Any other non-zero exit: stop
+   and quote the output. Keep the output for step 6.
 
 6. **PR body.** If `gh pr view <branch> --json url,state` shows an `OPEN` PR, skip this
    step. Headings, first match wins:

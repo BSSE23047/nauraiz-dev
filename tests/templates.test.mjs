@@ -245,7 +245,7 @@ test('gate skill: one runner call, exit codes 0/1/2, paste the output, no re-run
   for (const needle of [
     GATE_CMD, '--plan <path>', '--only', '`0`', '`1`', '`2`', 'no gate is configured', '/nauraiz-dev:init',
     'no plan for this branch (pass --plan)', 'exit 0 but', 'verbatim', 'Never re-run', 'unless the runner reported',
-    'never the gate result', '`nauraiz-dev:`', 'config failed to load',
+    'never the gate result', '`nauraiz-dev:`', 'config failed to load', 'Any other non-zero exit',
   ]) assert.ok(body.includes(needle), `gate must mention ${needle}`);
   assert.doesNotMatch(body, /scripts\\gate/, 'forward slashes only: the Stop hook looks for scripts/gate/run.mjs');
 });
@@ -272,6 +272,8 @@ test('ship skill: user-only, the seven steps in order, approvals panel, PR body 
     'git status --porcelain --untracked-files=no', 'commit or stash', 'refuses to start', 'gated HEAD',
     'git ls-files', '`nauraiz-dev:`', 'config failed to load', 'never offer to ship without a gate',
     'gh pr view <branch> --json url,state', 'instead of `gh pr create`',
+    'leaving out the plan file', 'git status --porcelain -- <plan>', 'covers tracked files', 'untracked file the gate reads',
+    'docs: plan for <branch>', 'Any other non-zero exit',
   ]) assert.ok(body.includes(needle), `ship must mention ${needle}`);
   assert.doesNotMatch(body, /which to keep/, 'ship never rewrites history to drop commits');
   assert.doesNotMatch(body, /For each section/, 'the PR template is shown once');
@@ -300,9 +302,12 @@ test('review skill: two modes, reviewer agent on a diff file, gate in a temp wor
   for (const needle of [
     "require('os').tmpdir()", '-review-<n>-<random>', 'never relative to', 'must not exist', 'the exact `<wt>` this run created',
     'isCrossRepository', 'package.json scripts', 'gate result includes uncommitted changes',
-    '`sonnet`, `opus` or `haiku`', 'Dispatch only after the diff file is written',
+    '`sonnet`, `opus`, `haiku` or `fable`', 'Dispatch only after the diff file is written',
+    'delete `<wt>/.claude/nauraiz-dev.json` and `<wt>/.claude/nauraiz-dev.local.json`',
+    "this runs the fork's code through the gate", 'only if `git worktree add` succeeded',
   ]) assert.ok(body.includes(needle), `review must mention ${needle}`);
   assert.doesNotMatch(body, /\.\.\/<this folder/, 'the worktree is never relative to the checkout');
+  assert.doesNotMatch(body, /worktree prune/, 'prune could drop worktrees this run did not create');
   for (const needle of [
     '## Branch mode', '## PR mode', '`nauraiz-dev:reviewer`', 'models.review', 'git diff origin/<base>...HEAD >',
     'git rev-parse --git-path', 'Never paste a diff', GATE_CMD, 'gh pr diff <n> >', 'git fetch origin pull/<n>/head',

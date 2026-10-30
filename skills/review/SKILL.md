@@ -24,7 +24,7 @@ Rules for both modes:
 - Merge only when the owner says "merge" in this session.
 
 Reviewer: the Agent tool with `subagent_type` `nauraiz-dev:reviewer`. Pass `model` only
-when `models.review` is `sonnet`, `opus` or `haiku`; otherwise leave it out (the agent's
+when `models.review` is `sonnet`, `opus`, `haiku` or `fable`; otherwise leave it out (the agent's
 own model). Dispatch only after the diff file is written. Its prompt: the diff file
 path, the base, the plan path and issue if any, and for a PR its title and body. It has
 no shell and works from the diff file; it returns findings by severity.
@@ -53,16 +53,17 @@ no shell and works from the diff file; it returns findings by severity.
      hex characters you pick), never relative to the current folder. Quote it.
    - `<wt>` must not exist (`git worktree list` and the file system); if it does, stop.
    - `git fetch origin pull/<n>/head`, then `git worktree add --detach "<wt>" FETCH_HEAD`.
-   - Copy this checkout's `.claude/nauraiz-dev.json` and `.claude/nauraiz-dev.local.json`
-     (those that exist) into `<wt>/.claude/`. The gate commands are then the owner's,
-     but the PR still controls what they run (package.json scripts, tests, build files).
+   - In `<wt>`, delete `<wt>/.claude/nauraiz-dev.json` and `<wt>/.claude/nauraiz-dev.local.json`,
+     then copy this checkout's two files (those that exist) into `<wt>/.claude/`. The gate
+     commands are then the owner's, but the PR still controls what they run
+     (package.json scripts, tests, build files).
+   - When `isCrossRepository` is true, before anything runs, warn:
+     this runs the fork's code through the gate; ask, and stop until the owner answers.
    - If the gate needs dependencies, install them in `<wt>` (`npm ci`, `flutter pub get`).
-     When `isCrossRepository` is true, first warn that installing and the gate run the
-     fork's code, and ask.
    - `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" --cwd "<wt>"`; add
      `--plan "<wt>/<plan>"` if the PR carries a plan for `headRefName`.
-   - Then `git worktree remove --force "<wt>"` with the exact `<wt>` this run created,
-     never another path, and `git worktree prune`, even when a step failed.
+   - Then, only if `git worktree add` succeeded, `git worktree remove --force "<wt>"` with
+     the exact `<wt>` this run created, never another path, even when a step failed.
 4. If the `/code-review` skill is available, run it on PR `<n>` (no `--comment`).
 5. Review notes: the reviewer's and `/code-review`'s findings merged and ranked by
    severity, the gate output verbatim, what was not verified. Post them on the PR
