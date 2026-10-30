@@ -27,12 +27,15 @@ Two limits apply to every step:
    (installed and enabled), nauraiz-dev (installed and enabled), hooks registered once
    (ok when `duplicateHooks` is empty), auto-memory (`autoMemory`), cross-marketplace
    dependencies (`crossMarketplace.allowed`), user `~/.claude/CLAUDE.md` (`userClaudeMd`).
+   Recommend installing nauraiz-dev at user scope, `claude plugin install nauraiz-dev@nauraiz-dev --scope user`,
+   because then every folder shows the nauraiz-dev header, not only repos that enable it.
    If `fixes` is empty and `userClaudeMd` is true, say the machine is ready and stop.
 
 3. Go through `fixes` in order, one at a time:
    - A line that starts with `claude plugin` is a command: show it, ask, and on yes run
      it with Bash (Claude Code asks for permission on its own, since only the check
      script is pre-approved). If `claude.version` is null, say so before running anything.
+     When the line installs nauraiz-dev, add `--scope user` to it.
    - Any other line is an instruction about a file (a hook to remove from
      `settings.json`, a setting to add). Print it as given, with the exact text to add or
      remove, and ask the user to make that change themselves. Do not edit the file.

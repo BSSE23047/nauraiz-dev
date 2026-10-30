@@ -32,6 +32,7 @@ test('config template mirrors DEFAULTS with guided enforcement and empty gate/pr
   assert.equal(cfg.state, '{{state}}');
   assert.deepEqual(cfg.gate, {});
   assert.deepEqual(cfg.protectedPaths, []);
+  assert.deepEqual(cfg.sharedPaths, []);
   assert.deepEqual(cfg.models, DEFAULTS.models);
   assert.deepEqual(cfg.pr, DEFAULTS.pr);
   assert.equal(cfg.scopeAsk, true);
@@ -82,9 +83,13 @@ test('init skill frontmatter', () => {
   const description = /^description: "(.*)"$/m.exec(fm)[1];
   assert.ok(description.length <= 1024);
   assert.match(fm, /^disable-model-invocation: true$/m);
-  assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/init\/detect\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/show\.mjs" \*\) Read Write Edit Glob$/m);
+  assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/init\/detect\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/show\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/init\/exclude\.mjs" \*\) Read Write Edit Glob$/m);
   assert.doesNotMatch(text.split('---\n').slice(2).join('---\n'), /Templates are in/);
-  assert.ok(lines(text).length <= 80);
+  const body = text.split('---\n').slice(2).join('---\n');
+  for (const needle of ['--local', '--print', '.claude/nauraiz-dev.local.json', '.claude/settings.local.json', 'exclude.mjs', 'sharedPaths', 'offeredGate', 'testOneShot']) {
+    assert.ok(body.includes(needle), `init skill must mention ${needle}`);
+  }
+  assert.ok(lines(text).length <= 100);
 });
 
 test('no client material in templates, the init skill or the init fixtures', () => {

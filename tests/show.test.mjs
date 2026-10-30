@@ -28,3 +28,9 @@ test('unknown file exits 1 with a message and no stdout', () => {
   assert.equal(r.stdout, '');
   assert.match(r.stderr, /no such plugin file/);
 });
+
+test('agents/ is an allowed dir: a missing agent file is null, not an error', () => {
+  assert.doesNotThrow(() => resolveShown('agents/x'));
+  assert.equal(resolveShown('agents/x'), null);
+  assert.equal(resolveShown('agents/../package.json'), null);
+});

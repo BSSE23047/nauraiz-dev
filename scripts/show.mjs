@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { isMain } from './lib/main.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ALLOWED_DIRS = ['templates', 'skills'];
+const ALLOWED_DIRS = ['templates', 'skills', 'agents'];
 
 export function resolveShown(rel) {
   if (typeof rel !== 'string' || !rel || path.isAbsolute(rel)) return null;
@@ -30,7 +30,7 @@ export function resolveShown(rel) {
 if (isMain(import.meta.url)) {
   const file = resolveShown(process.argv[2]);
   if (!file) {
-    process.stderr.write(`nauraiz-dev: no such plugin file: ${process.argv[2] ?? ''} (templates/… or skills/… only)\n`);
+    process.stderr.write(`nauraiz-dev: no such plugin file: ${process.argv[2] ?? ''} (templates/…, skills/… or agents/… only)\n`);
     process.exitCode = 1;
   } else {
     process.stdout.write(readFileSync(file, 'utf8'));
