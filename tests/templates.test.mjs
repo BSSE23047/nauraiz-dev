@@ -92,8 +92,12 @@ test('init skill frontmatter', () => {
   assert.ok(lines(text).length <= 110);
 });
 
-test('no client material in templates, the init skill or the init fixtures', () => {
-  const dirs = ['templates', 'skills/init', 'scripts/init', 'tests/fixtures/repos/npm-app', 'tests/fixtures/repos/flutter-app'];
+test('no client material in templates, the init and task skills, their evals or the init fixtures', () => {
+  const dirs = [
+    'templates', 'skills/init', 'skills/start-task', 'skills/grill', 'skills/kickoff-prompt', 'scripts/init',
+    'evals/start-task-triggers', 'evals/start-task-small-negative', 'evals/grill-asks-on-decisions', 'evals/kickoff-triggers',
+    'tests/fixtures/repos/npm-app', 'tests/fixtures/repos/flutter-app',
+  ];
   const files = [];
   const walk = (d) => {
     for (const n of readdirSync(d)) {
@@ -111,4 +115,99 @@ test('no client material in templates, the init skill or the init fixtures', () 
 test('rules README stays at most 3 lines (Claude Code loads .claude/rules/ every session)', () => {
   assert.ok(lines(tpl('rules/README.md')).length <= 3, `${lines(tpl('rules/README.md')).length} lines`);
   assert.match(tpl('knowledge/README.md'), /^## Writing a rule/m, 'the rule-writing guidance lives in the knowledge README');
+});
+
+const read = (rel) => readFileSync(path.join(root, rel), 'utf8');
+const APPROVAL_RULE = "Any `*_approval` field is `pending owner confirmation` unless the owner said yes in this session; then quote the date and the owner's words.";
+
+/** Frontmatter and body of a 0.2 task skill, after checking the rules they share. */
+function taskSkill(name) {
+  const text = read(`skills/${name}/SKILL.md`);
+  const fm = text.split('---\n')[1];
+  const body = text.split('---\n').slice(2).join('---\n');
+  assert.match(fm, new RegExp(`^name: ${name}$`, 'm'));
+  const description = /^description: "(.*)"$/m.exec(fm)?.[1];
+  assert.ok(description, `${name}: quoted description`);
+  assert.ok(description.length <= 300, `${name}: description is ${description.length} chars`);
+  assert.match(description, /\bNot for\b/, `${name}: description says what it is not for`);
+  assert.doesNotMatch(fm, /disable-model-invocation/, `${name} must stay model-invocable`);
+  assert.ok(lines(text).length <= 90, `${name}: ${lines(text).length} lines`);
+  return { fm, body };
+}
+
+test('start-task skill: frontmatter, the nine steps in order, collision, exploration, approval rule, gate', () => {
+  const { fm, body } = taskSkill('start-task');
+  assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/task\/collision\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/gate\/run\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/show\.mjs" \*\) Bash\(gh issue view \*\) Bash\(git fetch \*\) Bash\(git rev-list \*\) Read Glob Grep$/m);
+  const steps = ['Identify', 'Collision check', 'Base check', 'Triage', 'Ask when it matters', 'Route the process', 'Explore cheaply', 'Plan', 'Build, gate, report'];
+  let at = -1;
+  steps.forEach((s, i) => {
+    const next = body.indexOf(`\n${i + 1}. **${s}.**`);
+    assert.ok(next > at, `step ${i + 1} "${s}" missing or out of order`);
+    at = next;
+  });
+  for (const needle of [
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/task/collision.mjs"', '`taken`', '`unknown`', '`ours`', '`free`',
+    '`Explore`', 'models.explore', '~5 files', '~800 lines', APPROVAL_RULE,
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" skills/start-task/reference.md',
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"', 'grill', 'gh issue view', 'git rev-list', 'branch.base',
+  ]) assert.ok(body.includes(needle), `start-task must mention ${needle}`);
+});
+
+test('start-task reference: the routing table and the plan rules', () => {
+  const ref = read('skills/start-task/reference.md');
+  for (const phase of ['Questions', 'Design (large only)', 'Plan', 'Build', 'Debug', 'Before the report', 'Before a PR']) {
+    assert.ok(ref.includes(`\n| ${phase} |`), `routing row ${phase}`);
+  }
+  for (const needle of [
+    'superpowers:brainstorming', 'superpowers:writing-plans', 'superpowers:test-driven-development',
+    'superpowers:subagent-driven-development', 'superpowers:systematic-debugging',
+    'superpowers:verification-before-completion', '`branch:`', '### Allowed', 'Decisions to confirm',
+    'plan.dir', 'plan.template', 'templates/plan-frontmatter.md', APPROVAL_RULE, '**small**', '**normal**', '**large**',
+  ]) assert.ok(ref.includes(needle), `reference must mention ${needle}`);
+  if (FORBIDDEN) assert.doesNotMatch(ref, FORBIDDEN);
+});
+
+test('grill skill: must-ask triggers, three questions, AskUserQuestion, headless rule, brainstorming after', () => {
+  const { body } = taskSkill('grill');
+  for (const needle of [
+    'Decisions needed', 'Open decision', '"decide"', '"confirm"', '"TBD"', 'sharedPaths', '`shared`', '`*_approval`',
+    'At most 3 questions', 'AskUserQuestion', 'recommended option first', 'cost if', 'Decisions to confirm',
+    'claude -p', '`AskUserQuestion` is not available', 'superpowers:brainstorming',
+  ]) assert.ok(body.includes(needle), `grill must mention ${needle}`);
+});
+
+test('kickoff-prompt skill and template: guard block first, placeholders, model and budget', () => {
+  const { body } = taskSkill('kickoff-prompt');
+  for (const needle of ['node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" templates/kickoff-prompt.md', 'gh issue view', 'model', 'budget', 'mockupRoot', '{{absPath}}']) {
+    assert.ok(body.includes(needle), `kickoff-prompt must mention ${needle}`);
+  }
+  const t = tpl('kickoff-prompt.md');
+  for (const needle of ['{{absPath}}', '{{branch}}', '{{version}}', '{{enforcement}}', '`pwd`', '`git branch --show-current`',
+    'nauraiz-dev v{{version}} · enforcement={{enforcement}}', 'do not cd', 'do not branch', 'Model:', 'Budget:']) {
+    assert.ok(t.includes(needle), `kickoff template must contain ${needle}`);
+  }
+  assert.ok(t.indexOf('{{absPath}}') < t.indexOf('Model:'), 'the guard block comes first');
+});
+
+test('evals for start-task, grill and kickoff-prompt exist with the expected graders', () => {
+  const evalCase = (name) => ({
+    prompt: read(`evals/${name}/prompt.md`),
+    graders: readdirSync(path.join(root, 'evals', name, 'graders')).map((f) => read(`evals/${name}/graders/${f}`)).join('\n'),
+  });
+  const skillFired = (skill) => `input_match: '"skill"\\s*:\\s*"(?:[\\w-]+:)?${skill}"'`;
+  const t = evalCase('start-task-triggers');
+  assert.match(t.prompt, /^Work on issue #12 on branch feature\/12-x/m);
+  assert.ok(t.graders.includes(skillFired('start-task')));
+  const n = evalCase('start-task-small-negative');
+  assert.match(n.prompt, /^fix the typo in README line 3/m);
+  assert.ok(n.graders.includes(skillFired('start-task')));
+  assert.match(n.graders, /^max: 0$/m);
+  const g = evalCase('grill-asks-on-decisions');
+  assert.match(g.prompt, /^## Decisions needed$/m);
+  assert.match(g.graders, /AskUserQuestion/);
+  assert.match(g.graders, /Decisions to confirm/);
+  const k = evalCase('kickoff-triggers');
+  assert.match(k.prompt, /^write a kickoff prompt for issue 12/m);
+  assert.ok(k.graders.includes(skillFired('kickoff-prompt')));
+  for (const c of [t, n, g, k]) assert.match(c.prompt, /^---\ndescription: .+\nmax_turns: \d+\nallowed_tools: \[/);
 });
