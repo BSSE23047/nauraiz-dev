@@ -7,10 +7,10 @@ import { loadConfig, MAX_CONTEXT_CHARS } from '../scripts/lib/config.mjs';
 import { buildSessionContext, truncate } from '../scripts/lib/context.mjs';
 import { fx } from './helpers.mjs';
 
-const START_LINE = 'Task start: run /nauraiz-dev:start-task on the first substantive request (checks who owns the issue, asks before building, routes the process).';
+const START_LINE = 'Task start: run /nauraiz-dev:start-task on the first substantive request (checks who owns the issue, asks before building, routes the process); to push and open a PR: /nauraiz-dev:ship.';
 
 const build = (name, extra = {}) =>
-  buildSessionContext({ cwd: fx(name), ...loadConfig(fx(name)), branch: 'main', plan: null, ...extra });
+  buildSessionContext({ cwd: fx(name), ...loadConfig(fx(name)), branch: 'main', plan: null, pluginRoot: null, ...extra });
 
 test('unconfigured repo gets the two-line header', () => {
   const t = build('empty');
@@ -97,13 +97,20 @@ test('oversized session head is truncated to the cap', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('local-only config shows mode=local and the gate line with the runner command', () => {
-  const t = build('local-only');
+test('local-only config shows mode=local and the gate line with the expanded runner path (forward slashes)', () => {
+  const t = build('local-only', { pluginRoot: 'C:\\Users\\dev\\.claude\\plugins\\nauraiz-dev' });
   const lines = t.split('\n');
   assert.match(lines[0], / · mode=local$/);
   assert.equal(lines[1], START_LINE);
-  assert.ok(lines.includes('Gate: test (run node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"; read real exit codes, never a grepped summary)'));
+  assert.ok(lines.includes('Gate: test (run node "C:/Users/dev/.claude/plugins/nauraiz-dev/scripts/gate/run.mjs"; read real exit codes, never a grepped summary)'));
+  assert.doesNotMatch(t, /\$\{CLAUDE_PLUGIN_ROOT\}/);
   assert.ok(t.length <= MAX_CONTEXT_CHARS);
+});
+
+test('local-only gate line without a plugin root points at /nauraiz-dev:gate, never a literal ${CLAUDE_PLUGIN_ROOT}', () => {
+  const t = build('local-only');
+  assert.ok(t.split('\n').includes('Gate: test (run /nauraiz-dev:gate; read real exit codes, never a grepped summary)'));
+  assert.doesNotMatch(t, /\$\{CLAUDE_PLUGIN_ROOT\}/);
 });
 
 test('local mode with no gate says so; project mode has no mode tag or Gate line', () => {

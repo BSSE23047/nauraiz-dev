@@ -35,10 +35,19 @@ test('a config problem is also shown to the user as a systemMessage', async () =
   }
 });
 
-test('local-only repo gets mode=local, the gate line and the start-task line', async () => {
-  const { stdout } = await runHook('session-start', { cwd: fx('local-only'), source: 'startup' });
+const START_LINE = 'Task start: run /nauraiz-dev:start-task on the first substantive request (checks who owns the issue, asks before building, routes the process); to push and open a PR: /nauraiz-dev:ship.';
+
+test('local-only repo gets mode=local, the gate line with the expanded plugin root and the start-task line', async () => {
+  const { stdout } = await runHook('session-start', { cwd: fx('local-only'), source: 'startup' }, { CLAUDE_PLUGIN_ROOT: 'D:\\plugins\\nauraiz dev' });
   const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
   assert.match(ctx.split('\n')[0], / · mode=local$/);
-  assert.match(ctx, /^Task start: run \/nauraiz-dev:start-task /m);
-  assert.match(ctx, /^Gate: test \(run node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/gate\/run\.mjs"/m);
+  assert.equal(ctx.split('\n')[1], START_LINE);
+  assert.match(ctx, /^Gate: test \(run node "D:\/plugins\/nauraiz dev\/scripts\/gate\/run\.mjs"/m);
+});
+
+test('local-only repo without CLAUDE_PLUGIN_ROOT gets the /nauraiz-dev:gate pointer', async () => {
+  const { stdout } = await runHook('session-start', { cwd: fx('local-only'), source: 'startup' }, { CLAUDE_PLUGIN_ROOT: '' });
+  const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+  assert.match(ctx, /^Gate: test \(run \/nauraiz-dev:gate; /m);
+  assert.doesNotMatch(ctx, /\$\{CLAUDE_PLUGIN_ROOT\}/);
 });

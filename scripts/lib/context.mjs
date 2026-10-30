@@ -59,9 +59,10 @@ function mockupRootWarning(cwd, mockupRoot) {
 /**
  * The context injected at session start: a header, the start-task line (plus the local-mode gate and any setup warnings) and, depending on the project's
  * state, the head of session.md, the top backlog headings or the active plan's handoff.
- * `source` is the SessionStart payload source (startup|resume|clear|compact|fork).
+ * `source` is the SessionStart payload source (startup|resume|clear|compact|fork). `pluginRoot` (default
+ * CLAUDE_PLUGIN_ROOT) is spelled out in the local-mode gate line, since hook output is not variable-expanded.
  */
-export function buildSessionContext({ cwd, config, found, error, branch, plan, source, mode, superpowers }) {
+export function buildSessionContext({ cwd, config, found, error, branch, plan, source, mode, superpowers, pluginRoot = process.env.CLAUDE_PLUGIN_ROOT }) {
   let header = `nauraiz-dev v${VERSION} · enforcement=${config.enforcement} · state=${config.state}`;
   if (mode === 'local') header += ' · mode=local';
   if (!found && error) header += ` · config unreadable: ${error}`; // a file exists but did not parse: init is not the fix
@@ -72,12 +73,15 @@ export function buildSessionContext({ cwd, config, found, error, branch, plan, s
 
   const out = [
     header,
-    'Task start: run /nauraiz-dev:start-task on the first substantive request (checks who owns the issue, asks before building, routes the process).',
+    'Task start: run /nauraiz-dev:start-task on the first substantive request (checks who owns the issue, asks before building, routes the process); to push and open a PR: /nauraiz-dev:ship.',
   ];
   if (mode === 'local') {
     const gate = Object.keys(config.gate ?? {});
+    const run = pluginRoot
+      ? `node "${pluginRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/scripts/gate/run.mjs"`
+      : '/nauraiz-dev:gate';
     out.push(gate.length
-      ? `Gate: ${gate.join(', ')} (run node "\${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"; read real exit codes, never a grepped summary)`
+      ? `Gate: ${gate.join(', ')} (run ${run}; read real exit codes, never a grepped summary)`
       : 'Gate: none configured');
   }
   if (superpowers && !(superpowers.installed && superpowers.enabled)) {
