@@ -1,6 +1,6 @@
 # nauraiz-dev design
 
-What this plugin is for, what it deliberately is not, and the decisions behind 0.1.0.
+What this plugin is for, what it deliberately is not, and the decisions behind 0.1.0 and 0.2.0.
 
 ## Why it exists
 
@@ -23,7 +23,7 @@ a team gets it on day one. It layers on top of
 2. One `init` per project writes `.claude/nauraiz-dev.json`, a CLAUDE.md under 200 lines,
    and (optionally) a memory scaffold: `knowledge/`, `rules/`, `state/`.
 3. The system improves itself over time: lessons become dated knowledge and rules,
-   memory is pruned, relevant skills are suggested with their context cost (later releases).
+   memory is pruned, relevant skills are suggested with their context cost (shipped in 0.2.0).
 4. Every claim about the plugin is measured on a real repo before it is published.
 5. Windows and macOS behave the same.
 
@@ -76,10 +76,92 @@ a team gets it on day one. It layers on top of
 - **Two state modes.** `scaffold` keeps `session.md`, `backlog.md` and `completed.md`;
   `none` keeps the handoff inside the branch's plan, for teams that do not want state files.
 
+## Why 0.2.0
+
+0.1 was safe and kept a session on track, but it did not change how Claude works. Three
+flow tests on a real project showed what was missing:
+
+- No run asked the owner anything before building, though every issue had an open
+  decision and touched a shared layer.
+- Two of the three runs wrote an owner approval into the plan that the owner never gave.
+- Superpowers skills were not invoked in the runs that recorded skills; only the
+  project's own task skills ran.
+- One run duplicated a colleague's open pull request, because nothing checked who owned
+  the issue.
+- Trying the plugin dirtied the repo, and the project's own scope check counted the files.
+- Long Opus runs read very large amounts of cached context, most of it exploration the
+  main thread did itself.
+
+0.2.0 is built around those findings. Its goals: ask before building when it matters,
+never record an approval the owner did not give, never start on an issue someone else
+owns, choose the process for each phase without running two, let a developer try the
+plugin without changing a tracked file, turn the repetitive end of a task into skills,
+and spend fewer main-thread tokens, not more.
+
+## Decisions in 0.2.0
+
+- **Ask only when it matters.** `grill` searches the repo and the issue first, then asks
+  only what the repo cannot answer and where a wrong guess changes what gets built. It
+  always asks when the issue has an open decision, the work touches a shared path, or the
+  plan template requires an approval. Never more than three questions in a round, each
+  with a recommendation and the cost of being wrong. Small tasks get no round.
+- **Headless never asks.** With no one to answer, `grill` writes each question and its
+  recommended answer under "Decisions to confirm" in the plan and proceeds on the
+  recommendation. The report shows what was assumed.
+- **Approvals are the owner's, never inferred.** An `*_approval` field is
+  `pending owner confirmation` unless the owner said yes in this session. A `PreToolUse`
+  check asks (it never denies) when an edit to a plan records any other value; `ship`
+  lists the non-pending values and lets the owner keep or reset each one.
+- **Collision check before work.** `scripts/task/collision.mjs` reports assignees, open
+  PRs that reference the issue and who pushed the branch, as a verdict: `free`, `ours`,
+  `taken` or `unknown`. If `gh` is missing, offline or unauthenticated the verdict is
+  `unknown` with the reason, never `free`.
+- **One process per phase.** `start-task` routes each phase to the project's own skill
+  when it has one, else to the matching superpowers skill, and says its picks in one
+  line. The session header carries one line pointing at `start-task`, not the routing table.
+- **Local-only mode.** A config with only `.claude/nauraiz-dev.local.json` is a full
+  config (`mode: local`, `guided`). `init --local` writes that file, `settings.local.json`
+  and git's exclude file, and never a tracked file, `.gitignore` included. The exclude
+  file lives in the git common directory, so every worktree is covered. Because
+  `CLAUDE.md` is untouched, the session header carries the gate names itself.
+- **The gate is a script, not a habit.** `scripts/gate/run.mjs` runs the configured
+  commands through the platform shell, reports exit codes, and treats a failing summary
+  printed under exit code 0 as red. `${base}` resolves to `origin/<base>` when the local
+  branch is missing or behind it, which fixes scope checks against a stale base.
+- **Exploration moves off the main thread.** Wide reading goes to a cheaper `explore`
+  model in a subagent that returns conclusions and line ranges; the main thread reads
+  only those ranges. The Stop line now includes subagent tokens and elapsed minutes so
+  the cost is visible.
+- **`ship` is its own skill, owner-invoked.** Rebase, gate, approval settlement, PR body
+  in the repo's own format, push, open the PR. It never merges, never force-pushes, and
+  refuses when the remote branch is not the owner's.
+- **`review` is one skill with two modes.** No argument: review the local branch through
+  the `reviewer` agent, which reads a diff file rather than having the diff pasted into
+  the main thread. With a PR number: gate, review notes, never an approval.
+- **`measure` is capped and plain.** Two headless arms, same model, fresh clone, one run
+  each, a per-arm budget. Both arms get the same prompt a developer would type, so the
+  plugin has to earn its behaviour rather than being handed a special kickoff. A report is
+  n=1 and says so.
+- **The description budget is checked, not assumed.** All thirteen skills and both agents
+  are measured with `claude plugin details`; the total must stay under 1,500 tokens.
+- **Honest platform claims.** Windows gets a real interactive smoke test. macOS gets unit
+  tests and plugin validation in CI only, and the README says so.
+
+## Shipped
+
+- 0.1.x: the five hooks, `init`, `setup`, `handoff`, config layers, the eval runner.
+- 0.2.0: `start-task`, `grill`, `kickoff-prompt`, `gate`, `ship`, `review`,
+  `capture-lesson`, `memory-hygiene`, `find-skills`, `measure`, the `implementer` and
+  `reviewer` agents, local-only mode, `init --print`, the approval check, the collision
+  check, the gate runner, and the extended cost line.
+
 ## Roadmap
 
-- 0.2: `start-task` (triage small/normal/large), `grill` (one grounded question at a time),
-  `kickoff-prompt` (issue to pasteable prompt), `gate` (read real exit codes and summaries),
-  `review`, `capture-lesson`, and two agents (implementer, reviewer).
-- 0.3: `memory-hygiene`, `find-skills`, `measure` (the same task with and without the
-  plugin, reporting tokens, time and gate result), and the first published numbers.
+- First published `measure` reports in `docs/measure/`, and the numbers in the README only
+  from them.
+- Measure how the skills trigger alongside superpowers loaded (the evals so far run
+  without it).
+- A real interactive session on macOS.
+- A real icon.
+
+Dates are not promised.
