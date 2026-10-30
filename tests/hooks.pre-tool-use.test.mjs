@@ -120,3 +120,33 @@ test('unreadable project config still denies .env* and asks nothing else', async
   const other = await runHook('pre-tool-use', { cwd: fx('broken'), tool_name: 'Edit', tool_input: { file_path: path.join(fx('broken'), 'src', 'a.js') } }, env);
   assert.deepEqual([other.stdout, other.code], ['', 0]);
 });
+
+test('approval in a plan: Write, Edit and MultiEdit ask; pending is silent', async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-pretool-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(path.join(dir, '.claude'));
+  writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.json'), '{"enforcement":"guided"}');
+  mkdirSync(path.join(dir, '.work', 'tasks'), { recursive: true });
+  copyFileSync(path.join(fx('planned'), '.work', 'tasks', '12-example.md'), path.join(dir, '.work', 'tasks', '12-example.md'));
+  const git = (...a) => execFileSync('git', a, { cwd: dir, stdio: 'ignore' });
+  git('init', '-q');
+  git('checkout', '-q', '-b', 'feature/12-example');
+  git('-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'init');
+
+  const file_path = path.join(dir, '.work', 'tasks', '12-example.md');
+  const approved = 'shared_layer_approval: owner kickoff 2026-10-31';
+  const cases = [
+    { tool_name: 'Write', tool_input: { file_path, content: `---\n${approved}\n---\n` } },
+    { tool_name: 'Edit', tool_input: { file_path, old_string: 'x', new_string: approved } },
+    { tool_name: 'MultiEdit', tool_input: { file_path, edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c', new_string: approved }] } },
+  ];
+  for (const c of cases) {
+    const r = await runHook('pre-tool-use', { cwd: dir, ...c });
+    assert.equal(r.code, 0);
+    const out = decisionOf(r.stdout);
+    assert.equal(out.permissionDecision, 'ask', c.tool_name);
+    assert.match(out.permissionDecisionReason, /records an approval: "owner kickoff 2026-10-31"/);
+  }
+  const pending = await runHook('pre-tool-use', { cwd: dir, tool_name: 'Edit', tool_input: { file_path, old_string: 'x', new_string: 'shared_layer_approval: pending owner confirmation' } });
+  assert.deepEqual([pending.stdout, pending.code], ['', 0]);
+});
