@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideEdit, findRecordedApproval } from '../scripts/lib/decide-edit.mjs';
+import { decideEdit, findRecordedApproval, findRecordedApprovals } from '../scripts/lib/decide-edit.mjs';
 
 const cwd = 'D:/repo';
 const config = (over = {}) => ({ enforcement: 'guided', protectedPaths: ['.env*', '**/Generated*/**'], ...over });
@@ -155,4 +155,28 @@ test('a protected path with an approval line -> deny wins', () => {
 test('no newText (e.g. NotebookEdit) or no approval line -> plan edit stays bookkeeping-allowed', () => {
   assert.equal(decideEdit({ cwd, filePath: planFile, config: planCfg(), found: true, plan }).decision, 'allow');
   assert.equal(decideEdit({ cwd, filePath: planFile, config: planCfg(), found: true, plan, newText: 'just text' }).decision, 'allow');
+});
+
+test('hardened matching: key case-insensitive, "- " list marker, unbalanced leading quote', () => {
+  assert.equal(findRecordedApproval('Shared_Layer_Approval: x'), 'x');
+  assert.equal(findRecordedApproval('- new_files_approval: x'), 'x');
+  assert.equal(findRecordedApproval('  - APPROVAL: "yes'), 'yes');
+  assert.equal(findRecordedApproval('a_approval: "pending owner confirmation'), null);
+  assert.deepEqual(findRecordedApprovals('a_approval: one\nb_approval: pending\nc_approval: two'), ['one', 'two']);
+  assert.deepEqual(findRecordedApprovals(undefined), []);
+});
+test('with oldText only a NEW approval value asks', () => {
+  const pendingOld = 'shared_layer_approval: "pending owner confirmation"\n';
+  const base = { cwd, filePath: planFile, config: planCfg(), found: true, plan };
+  // value-only change: pending -> a recorded value
+  const flipped = decideEdit({ ...base, oldText: pendingOld, newText: 'shared_layer_approval: "owner kickoff"\n' });
+  assert.equal(flipped.decision, 'ask');
+  assert.match(flipped.reason, /"owner kickoff"/);
+  // plan already records the approval; an unrelated edit does not re-ask
+  const recorded = 'title: x\nshared_layer_approval: owner kickoff\n';
+  assert.equal(decideEdit({ ...base, oldText: recorded, newText: 'title: y\nshared_layer_approval: owner kickoff\n' }).decision, 'allow');
+  // a rewrite that keeps the existing approval unchanged
+  assert.equal(decideEdit({ ...base, oldText: recorded, newText: recorded + 'more\n' }).decision, 'allow');
+  // a second, different approval is new
+  assert.equal(decideEdit({ ...base, oldText: recorded, newText: recorded + 'new_files_approval: ok\n' }).decision, 'ask');
 });

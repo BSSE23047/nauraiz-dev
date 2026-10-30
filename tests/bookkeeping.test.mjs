@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isBookkeeping } from '../scripts/lib/bookkeeping.mjs';
+import { isBookkeeping, isUnderPlanDir } from '../scripts/lib/bookkeeping.mjs';
 
 const config = { plan: { dir: 'docs/superpowers/plans' } };
 
@@ -27,4 +27,14 @@ test('plan dir comes from config; odd values never throw', () => {
 
 test('an absolute plan dir inside cwd is recognised when cwd is given', () => {
   assert.equal(isBookkeeping('plans/p.md', { plan: { dir: 'D:/repo/plans' } }, 'D:/repo'), true);
+});
+
+test('isUnderPlanDir: only the plan dir, never state files or an outside dir', () => {
+  assert.equal(isUnderPlanDir('docs/superpowers/plans/p.md', config), true);
+  assert.equal(isUnderPlanDir('plans/p.md', { plan: { dir: 'D:/repo/plans' } }, 'D:/repo'), true);
+  assert.equal(isUnderPlanDir('.claude/state/session.md', config), false);
+  assert.equal(isUnderPlanDir('src/a.js', config), false);
+  for (const c of [undefined, {}, { plan: { dir: 5 } }, { plan: { dir: '' } }, { plan: { dir: '.' } }, { plan: { dir: '../x' } }]) {
+    assert.equal(isUnderPlanDir('src/a.js', c), false, JSON.stringify(c));
+  }
 });

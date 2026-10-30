@@ -137,8 +137,10 @@ test('approval in a plan: Write, Edit and MultiEdit ask; pending is silent', asy
   const approved = 'shared_layer_approval: owner kickoff 2026-10-31';
   const cases = [
     { tool_name: 'Write', tool_input: { file_path, content: `---\n${approved}\n---\n` } },
-    { tool_name: 'Edit', tool_input: { file_path, old_string: 'x', new_string: approved } },
-    { tool_name: 'MultiEdit', tool_input: { file_path, edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c', new_string: approved }] } },
+    { tool_name: 'Edit', tool_input: { file_path, old_string: 'branch: feature/12-example', new_string: `branch: feature/12-example
+${approved}` } },
+    { tool_name: 'MultiEdit', tool_input: { file_path, edits: [{ old_string: '# Plan', new_string: '# Plan 2' }, { old_string: 'task: Example task', new_string: `task: Example task
+${approved}` }] } },
   ];
   for (const c of cases) {
     const r = await runHook('pre-tool-use', { cwd: dir, ...c });
@@ -147,6 +149,32 @@ test('approval in a plan: Write, Edit and MultiEdit ask; pending is silent', asy
     assert.equal(out.permissionDecision, 'ask', c.tool_name);
     assert.match(out.permissionDecisionReason, /records an approval: "owner kickoff 2026-10-31"/);
   }
-  const pending = await runHook('pre-tool-use', { cwd: dir, tool_name: 'Edit', tool_input: { file_path, old_string: 'x', new_string: 'shared_layer_approval: pending owner confirmation' } });
+  const pending = await runHook('pre-tool-use', { cwd: dir, tool_name: 'Edit', tool_input: { file_path, old_string: 'task: Example task', new_string: 'task: Example task\nshared_layer_approval: pending owner confirmation' } });
   assert.deepEqual([pending.stdout, pending.code], ['', 0]);
+});
+
+test('approval in a plan: value-only Edit, unchanged approvals and unrelated edits', async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-pretool-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(path.join(dir, '.claude'));
+  writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.json'), '{"enforcement":"guided"}');
+  mkdirSync(path.join(dir, '.work', 'tasks'), { recursive: true });
+  const file_path = path.join(dir, '.work', 'tasks', '12-example.md');
+  const git = (...a) => execFileSync('git', a, { cwd: dir, stdio: 'ignore' });
+  git('init', '-q');
+  git('checkout', '-q', '-b', 'feature/12-example');
+  git('-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'init');
+
+  writeFileSync(file_path, '---\ntitle: a\nshared_layer_approval: "pending owner confirmation"\n---\n');
+  const flip = await runHook('pre-tool-use', { cwd: dir, tool_name: 'Edit', tool_input: { file_path, old_string: 'pending owner confirmation', new_string: 'owner kickoff' } });
+  assert.equal(decisionOf(flip.stdout).permissionDecision, 'ask');
+  assert.match(decisionOf(flip.stdout).permissionDecisionReason, /"owner kickoff"/);
+  const multi = await runHook('pre-tool-use', { cwd: dir, tool_name: 'MultiEdit', tool_input: { file_path, edits: [{ old_string: 'title: a', new_string: 'title: b' }, { old_string: 'pending owner confirmation', new_string: 'owner kickoff' }] } });
+  assert.equal(decisionOf(multi.stdout).permissionDecision, 'ask');
+
+  writeFileSync(file_path, '---\ntitle: a\nshared_layer_approval: owner kickoff\n---\n');
+  const unrelated = await runHook('pre-tool-use', { cwd: dir, tool_name: 'Edit', tool_input: { file_path, old_string: 'title: a', new_string: 'title: b' } });
+  assert.deepEqual([unrelated.stdout, unrelated.code], ['', 0]);
+  const rewrite = await runHook('pre-tool-use', { cwd: dir, tool_name: 'Write', tool_input: { file_path, content: '---\ntitle: c\nshared_layer_approval: owner kickoff\n---\nbody\n' } });
+  assert.deepEqual([rewrite.stdout, rewrite.code], ['', 0]);
 });

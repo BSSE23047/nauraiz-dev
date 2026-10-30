@@ -1,32 +1,35 @@
 import { toRelative, matchesAny, normalize } from './paths.mjs';
-import { isBookkeeping } from './bookkeeping.mjs';
+import { isBookkeeping, isUnderPlanDir } from './bookkeeping.mjs';
 
 const ALLOW = Object.freeze({ decision: 'allow', reason: '' });
 
-const APPROVAL_LINE = /^[ \t]*([\w-]+)[ \t]*:[ \t]*(.*)$/gm;
+const APPROVAL_LINE = /^[ \t]*(?:-[ \t]+)?([\w-]+)[ \t]*:[ \t]*(.*)$/gm;
 
 /**
- * The first recorded owner approval in `text`: a `approval:` or `*_approval:` line whose value (quotes
- * stripped) is non-empty and does not start with `pending`. Null when there is none.
+ * Every recorded owner approval in `text`: `approval:` / `*_approval:` lines (key case-insensitive, an
+ * optional leading `- ` list marker) whose value, with a surrounding or an unbalanced leading quote
+ * stripped, is non-empty and does not start with `pending`.
  */
-export function findRecordedApproval(text) {
-  if (typeof text !== 'string') return null;
-  for (const [, key, raw] of text.matchAll(APPROVAL_LINE)) {
+export function findRecordedApprovals(text) {
+  if (typeof text !== 'string') return [];
+  const out = [];
+  for (const [, rawKey, raw] of text.matchAll(APPROVAL_LINE)) {
+    const key = rawKey.toLowerCase();
     if (key !== 'approval' && !key.endsWith('_approval')) continue;
-    const value = raw.trim().replace(/^(["'])(.*)\1$/, '$2').trim();
-    if (value && !/^pending/i.test(value)) return value;
+    const value = raw.trim().replace(/^(["'])(.*)\1$/, '$2').replace(/^["']/, '').trim();
+    if (value && !/^pending/i.test(value)) out.push(value);
   }
-  return null;
+  return out;
+}
+
+/** The first recorded owner approval in `text`, or null. */
+export function findRecordedApproval(text) {
+  return findRecordedApprovals(text)[0] ?? null;
 }
 
 /** A plan file: under `config.plan.dir`, or a .md under a `tasks/` or `plans/` directory. */
-function isPlanFile(rel, config, cwd) {
-  const dir = config?.plan?.dir;
-  if (typeof dir === 'string' && dir.trim()) {
-    const dirRel = typeof cwd === 'string' && cwd ? toRelative(cwd, dir) : normalize(dir);
-    const outside = dirRel === '' || dirRel === '..' || dirRel.startsWith('../') || dirRel.startsWith('/') || /^[A-Za-z]:/.test(dirRel);
-    if (!outside && matchesAny(rel, [`/${dirRel}/`])) return true;
-  }
+export function isPlanFile(rel, config, cwd) {
+  if (isUnderPlanDir(rel, config, cwd)) return true;
   const p = normalize(rel);
   return p.toLowerCase().endsWith('.md') && /(^|\/)(tasks|plans)\//i.test(p);
 }
@@ -35,12 +38,13 @@ function isPlanFile(rel, config, cwd) {
  * Decide whether an edit to `filePath` may proceed. Pure: `plan` is already resolved by the caller.
  * No config, or enforcement advisory (context only, spec 6.6) -> allow. Protected path -> deny.
  * A plan that records an owner approval (`*_approval:` not "pending ...") -> ask, before the bookkeeping
- * allow (plans live in the plan dir); `newText` is what the tool writes (absent -> no approval check).
+ * allow (plans live in the plan dir). `newText` is the file text after the edit (absent -> no approval
+ * check); with `oldText` (the text before) only an approval value the old text lacks counts as new.
  * Outside the plan's Allowed list -> ask (not when `config.scopeAsk === false`, which init sets when the
  * project already has its own PreToolUse edit hook), except for bookkeeping files (the plan dir,
  * .claude/state/**, .work/handoff.md), which are never asked about. Anything else -> allow.
  */
-export function decideEdit({ cwd, filePath, config, found, plan, newText }) {
+export function decideEdit({ cwd, filePath, config, found, plan, newText, oldText }) {
   if (!found || !config || config.enforcement === 'advisory') return ALLOW;
   const rel = toRelative(cwd, filePath);
 
@@ -52,7 +56,8 @@ export function decideEdit({ cwd, filePath, config, found, plan, newText }) {
   }
 
   if (typeof newText === 'string' && isPlanFile(rel, config, cwd)) {
-    const approval = findRecordedApproval(newText);
+    const known = new Set(findRecordedApprovals(oldText));
+    const approval = findRecordedApprovals(newText).find((v) => !known.has(v)) ?? null;
     if (approval !== null) {
       return {
         decision: 'ask',
