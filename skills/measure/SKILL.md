@@ -27,24 +27,28 @@ Ask the owner to confirm each of these in one message. Never start on a guess:
    Both arms get exactly this text. The `with` arm therefore runs the whole `start-task`
    loop; headless, its questions come out as written decisions, and the report counts them.
 3. **Model.** `sonnet` unless the owner names another.
-4. **Budget per arm.** Default 3 USD. Say the total cap: 2 x budget.
+4. **Budget per arm.** Default 3 USD. Say the approximate total cap: 2 x budget (the CLI can overshoot slightly). Above 20 USD per arm needs `--allow-high-budget`, and only on the owner's explicit say-so.
 5. **Gate command** to run in each clone afterwards (the repo's own test command), and an
    optional `--local-config <json file>` for the `with` clone.
 6. **Report path.** Public repo: `docs/measure/YYYY-MM-DD-<slug>.md`. A repo that is not
    public: that project's git-ignored work directory.
 
-Do not run the harness without an explicit yes to the model, the budget and the total cap.
+Do not run the harness without an explicit yes to the model, the budget and the approximate total cap.
+
+Both arms run headless with `--permission-mode acceptEdits`, a fixed allowed-tools list (override with `--allowed-tools "<space-separated>"`; read-only `gh`, no push) and a clone whose push URL is disabled. An arm that runs longer than `--timeout-min` (default 30) is killed and marked.
 
 ## Run
 
 1. Write the prompt to a file with Write (a temp file, not in a clone).
 2. Run, in one call, with a long Bash timeout (each arm can take 15 minutes):
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/measure/run.mjs" --repo <repo> --ref <sha> --prompt-file <file> --model <model> --budget <usd> --out <report.md> --gate "<cmd>" [--local-config <file>]`
-3. Exit `2` means a missing flag or budget: fix the arguments and ask before running again.
+3. Exit `1` with a FAILED report means `claude` could not be started; exit `2` means a missing flag or budget: fix the arguments and ask before running again.
    Any other failure: report it and stop. Never re-run on your own; a re-run costs the
    same money again.
 
 ## After
+
+The run prints `WARNING:` lines when the report or a stream contains the home directory, the temp directory, the plugin's real path or a forbidden term. Show every such line to the owner before anything is committed or published; the raw `.jsonl` streams are never committed (`docs/measure/*.jsonl` is git-ignored).
 
 Read the report and show the owner the table. State only what it says, including `n=1 per arm; not a benchmark.` The raw streams sit next to it as `<report>.with.jsonl` and
 `<report>.without.jsonl`. Do not commit or publish anything unless asked.

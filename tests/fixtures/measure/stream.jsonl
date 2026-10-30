@@ -1,4 +1,4 @@
-{"type":"system","subtype":"init","session_id":"s-1","model":"claude-sonnet-4-5","tools":["Skill","Edit","Write","AskUserQuestion"]}
+{"type":"system","subtype":"init","session_id":"s-1","model":"claude-sonnet-4-5","tools":["Skill","Edit","Write","AskUserQuestion"],"plugins":[{"name":"nauraiz-dev","path":"<plugin-dir>","source":"nauraiz-dev@inline","version":"0.2.0"},{"name":"superpowers","path":"<cache>","source":"superpowers@claude-plugins-official"}]}
 {"type":"assistant","message":{"id":"msg_1","role":"assistant","usage":{"input_tokens":10,"output_tokens":50,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200},"content":[{"type":"tool_use","id":"toolu_1","name":"Skill","input":{"skill":"nauraiz-dev:start-task"}}]}}
 {"type":"assistant","message":{"id":"msg_1","role":"assistant","usage":{"input_tokens":10,"output_tokens":50,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200},"content":[{"type":"tool_use","id":"toolu_2","name":"AskUserQuestion","input":{"questions":[{"question":"Which approach?"}]}}]}}
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}

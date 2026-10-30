@@ -7,3 +7,4 @@ node_modules/
 evals/results/*/
 .forbidden-terms
 docs/internal/
+docs/measure/*.jsonl
