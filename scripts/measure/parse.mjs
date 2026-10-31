@@ -10,7 +10,7 @@ export const DEFAULT_ALLOWED_TOOLS = [
   'Read', 'Glob', 'Grep', 'Bash(npm *)', 'Bash(npx *)', 'Bash(node *)', 'Bash(git status*)', 'Bash(git diff*)',
   'Bash(git log*)', 'Bash(git add *)', 'Bash(git commit *)', 'Bash(git branch*)', 'Bash(git switch *)',
   'Bash(git checkout *)', 'Bash(git fetch*)', 'Bash(git rev-list *)', 'Bash(git ls-remote *)', 'Bash(gh issue view *)',
-  'Bash(gh pr list *)', 'Bash(gh api user*)', 'Bash(gh search *)',
+  'Bash(gh pr list *)', 'Bash(gh search *)',
 ].join(' ');
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -166,14 +166,18 @@ export function formatReport({ date, task, prompt, model, arms, gate = {}, budge
   for (const [name, fn] of rows) out.push(`| ${name} | ${cell(fn(arms.with))} | ${cell(fn(arms.without))} |`);
   out.push(`| gate | ${cell(gateCell(gate.with))} | ${cell(gateCell(gate.without))} |`);
   out.push(`| claude exit code | ${arms.with.exit ?? 'n/a'} | ${arms.without.exit ?? 'n/a'} |`);
-  out.push('', 'Headless runs write their questions as decisions in the answer text; those are not counted in the questions row. Files touched are read from each clone after the run (committed, modified and untracked, repo-relative).');
+  out.push('', [
+    'The questions row counts AskUserQuestion calls only: headless runs write their questions as decisions in the answer text, and those are not counted.',
+    "Under `claude -p` a PreToolUse `ask` from a hook is treated as a deny: the edit is refused with the hook's reason and listed in the result's permission denials (probed on Claude Code 2.1.314).",
+    'Files touched are read from each clone after the run (committed, modified and untracked, repo-relative).',
+  ].join(' '));
 
   const common = { model, budgetUsd: budgetUsd ?? '<budget>', pluginDir: '<plugin-dir>', settingsFile: '<settings-file>', allowedTools };
   const cmd = (arm) => `claude ${buildArgs({ arm, ...common }).map(shellQuote).join(' ')} < <prompt-file>`;
   out.push(
     '', 'Commands (each arm runs once in its own fresh clone of the same ref):', '', '```sh', cmd('with'), cmd('without'), '```',
     '', `Both arms: \`--settings\` file contents \`${settingsJson()}\` (the installed copy is off; the \`with\` arm loads the plugin only through \`--plugin-dir\`).`,
-    '', `Safety, identical for both arms: \`--permission-mode ${PERMISSION_MODE}\`; allowed tools: \`${allowedTools}\`; pushing is disabled in each clone with \`git remote set-url --push origin ${PUSH_DISABLED}\` (the fetch URL stays so \`gh\` works).`,
+    '', `Safety, identical for both arms: \`--permission-mode ${PERMISSION_MODE}\`; allowed tools: \`${allowedTools}\`; pushing is disabled in each clone with \`git remote set-url --push origin ${PUSH_DISABLED}\` (the fetch URL stays so \`gh\` works). Only the disabled push URL is enforced; every other "no writes" rule rests on the allowed-tools list by convention, and \`node\` and \`npm\` can run anything.`,
   );
   out.push('', 'n=1 per arm; not a benchmark.', '');
   return out.join('\n');

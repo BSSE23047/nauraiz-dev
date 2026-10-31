@@ -25,24 +25,27 @@ Ask the owner to confirm each of these in one message. Never start on a guess:
 2. **Prompt.** Default, filled in and shown back verbatim:
    `Work on issue #N on branch B. Commit locally, do not push or open a PR. Report what you built, the gate results, decisions to confirm, risks and anything unverified.`
    Both arms get exactly this text. The `with` arm therefore runs the whole `start-task`
-   loop; headless, its questions come out as written decisions, and the report counts them.
+   loop; headless, its questions come out as written decisions. The report's questions row
+   counts AskUserQuestion calls only, so those written decisions are not in it.
 3. **Model.** `sonnet` unless the owner names another.
 4. **Budget per arm.** Default 3 USD. Say the approximate total cap: 2 x budget (the CLI can overshoot slightly). Above 20 USD per arm needs `--allow-high-budget`, and only on the owner's explicit say-so.
 5. **Gate command** to run in each clone afterwards (the repo's own test command), and an
-   optional `--local-config <json file>` for the `with` clone.
+   optional `--local-config <json file>` for the `with` clone. Without it the `with` clone
+   gets `{ "gate": { "gate": "<cmd>" } }` from `--gate` (`{}` with no gate): guided local mode.
 6. **Report path.** Public repo: `docs/measure/YYYY-MM-DD-<slug>.md`. A repo that is not
    public: that project's git-ignored work directory.
 
 Do not run the harness without an explicit yes to the model, the budget and the approximate total cap.
 
-Both arms run headless with `--permission-mode acceptEdits`, a fixed allowed-tools list (override with `--allowed-tools "<space-separated>"`; read-only `gh`, no push) and a clone whose push URL is disabled. An arm that runs longer than `--timeout-min` (default 30) is killed and marked.
+Both arms run headless with `--permission-mode acceptEdits`, a fixed allowed-tools list (override with `--allowed-tools "<space-separated>"`; read-only `gh`, no push) and a clone whose push URL is disabled. Only the disabled push URL is enforced; every other "no writes" rule is the allowed-tools list by convention (`node` and `npm` can run anything). Headless, a PreToolUse `ask` becomes a deny: the plugin's scope and approval asks refuse the edit instead of asking (probed on Claude Code 2.1.314). An arm that runs longer than `--timeout-min` (default 30) is killed and marked.
 
 ## Run
 
 1. Write the prompt to a file with Write (a temp file, not in a clone).
 2. Run, in one call, with a long Bash timeout (each arm can take 15 minutes):
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/measure/run.mjs" --repo <repo> --ref <sha> --prompt-file <file> --model <model> --budget <usd> --out <report.md> --gate "<cmd>" [--local-config <file>]`
-3. Exit `1` with a FAILED report means `claude` could not be started; exit `2` means a missing flag or budget: fix the arguments and ask before running again.
+3. Exit `1` with a FAILED report means `claude` could not be started, or an arm's `claude`
+   exited non-zero with no result line (the reason is on top of the report); exit `2` means a missing flag or budget: fix the arguments and ask before running again.
    Any other failure: report it and stop. Never re-run on your own; a re-run costs the
    same money again.
 

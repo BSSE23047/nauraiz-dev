@@ -55,8 +55,8 @@ test('buildArgs: prompt not in argv, shared safety flags, settings file for both
 
 test('default allowed tools: the owner-ruled list, read-only gh, no push', () => {
   const tools = DEFAULT_ALLOWED_TOOLS;
-  for (const t of ['Read', 'Glob', 'Grep', 'Bash(npm *)', 'Bash(git commit *)', 'Bash(gh issue view *)', 'Bash(gh api user*)', 'Bash(gh search *)']) assert.ok(tools.includes(t), t);
-  assert.doesNotMatch(tools, /git push|gh pr create|Write|Edit/);
+  for (const t of ['Read', 'Glob', 'Grep', 'Bash(npm *)', 'Bash(git commit *)', 'Bash(gh issue view *)', 'Bash(gh search *)']) assert.ok(tools.includes(t), t);
+  assert.doesNotMatch(tools, /git push|gh pr create|gh api|Write|Edit/);
 });
 
 const fullArm = (extra = {}) => ({ ...parseStream(stream), files: ['src/a.js', 'src/b.js'], approvals: 2, exit: 0, ...extra });
@@ -95,6 +95,10 @@ test('formatReport: a table of every field per arm, the commands, safety, gate r
   assert.ok(md.includes('git remote set-url --push origin DISABLED-by-nauraiz-measure'));
   assert.ok(!md.includes('/p/x'));
   assert.ok(md.trimEnd().endsWith('n=1 per arm; not a benchmark.'));
+  assert.ok(md.includes('The questions row counts AskUserQuestion calls only'), 'questions note');
+  assert.ok(md.includes('a PreToolUse `ask` from a hook is treated as a deny'), 'R14 probe note');
+  assert.ok(md.includes('Only the disabled push URL is enforced'), 'safety note: what is enforced');
+  assert.ok(md.includes('`node` and `npm` can run anything'), 'safety note: allow-list is convention');
 });
 
 test('formatReport: a missing gate shows not run, a missing result shows n/a and FAILED', () => {
@@ -119,7 +123,9 @@ test('measure skill: owner-only, short description, confirms budget and total ca
   assert.match(fm, /^disable-model-invocation: true$/m);
   const desc = /^description: "(.*)"$/m.exec(fm)[1];
   assert.ok(desc.length <= 200, `description is ${desc.length} chars`);
-  for (const needle of ['approximate total cap', '2 x budget', 'WARNING:', 'docs/measure/*.jsonl', '--allow-high-budget', '--timeout-min', 'sonnet', '3 USD', 'Work on issue #N on branch B.']) {
+  for (const needle of ['approximate total cap', '2 x budget', 'WARNING:', 'docs/measure/*.jsonl', '--allow-high-budget', '--timeout-min', 'sonnet', '3 USD', 'Work on issue #N on branch B.',
+    'counts AskUserQuestion calls only', 'a PreToolUse `ask` becomes a deny', 'Only the disabled push URL is enforced', '`{ "gate": { "gate": "<cmd>" } }`',
+    'no result line']) {
     assert.ok(text.includes(needle), `skill must mention ${needle}`);
   }
 });

@@ -182,14 +182,18 @@ export function scanLeaks({ files, pluginDir, tmpRoot, home = homedir() }) {
  * Refuses (before touching anything) unless `budgetUsd` is a positive number (above 20 only with
  * `allowHighBudget`). The approximate total cap is 2 x budget. `spawn` and `gateExec` are injectable so
  * tests never start `claude`. If `claude` cannot be started the run stops, the report is marked FAILED
- * and `ok` is false. The prompt goes on stdin; both arms get a --settings file switching the installed
- * copy of this plugin off, the same permission mode and tool list, and a clone that cannot push.
+ * and `ok` is false; an arm whose `claude` exits non-zero without a result line (and was not killed by the
+ * timeout) also fails the run, but the other arm still runs. The prompt goes on stdin; both arms get a
+ * --settings file switching the installed copy of this plugin off, the same permission mode and tool
+ * list, and a clone that cannot push. The `with` clone always gets a local config: `localConfig`'s
+ * contents, else `{ "gate": { "gate": <gate> } }`, else `{}` (guided local mode either way).
  */
 export async function runMeasure({
   repo, ref, prompt, model = 'sonnet', budgetUsd, out, gate, localConfig, task, allowedTools = DEFAULT_ALLOWED_TOOLS,
   timeoutMin = DEFAULT_TIMEOUT_MIN, allowHighBudget = false,
   pluginDir = DEFAULT_PLUGIN_DIR, date = new Date().toISOString().slice(0, 10),
   spawn = nodeSpawn, gateExec, tmpRoot = tmpdir(), log = console.log, claude = resolveClaude(), platform = process.platform,
+  rm = rmSync,
 }) {
   const budget = typeof budgetUsd === 'number' ? budgetUsd : Number.NaN;
   if (!(budget > 0) || !Number.isFinite(budget)) {
@@ -204,8 +208,8 @@ export async function runMeasure({
   }
   if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('the prompt is empty');
   if (ref.startsWith('-') || repo.startsWith('-')) throw new Error('--repo and --ref must not start with "-"');
-  const localConfigText = localConfig ? readFileSync(localConfig, 'utf8') : null;
-  if (localConfigText) JSON.parse(localConfigText); // refuse a broken config before spending anything
+  const localConfigText = localConfig ? readFileSync(localConfig, 'utf8') : JSON.stringify(gate ? { gate: { gate } } : {});
+  JSON.parse(localConfigText); // refuse a broken config before spending anything
 
   const totalCapUsd = budget * ARMS.length;
   log(`Approximate total cap: ${totalCapUsd} USD (${ARMS.length} arms x ${budget} USD, --max-budget-usd per arm; the CLI may overshoot slightly). One run per arm.`);
@@ -216,7 +220,7 @@ export async function runMeasure({
   const arms = {};
   const gates = {};
   const written = [];
-  let failed = null;
+  const failures = [];
   try {
     writeFileSync(settingsFile, settingsJson());
     for (const arm of ARMS) {
@@ -226,7 +230,7 @@ export async function runMeasure({
       git(['checkout', '--detach', ref], cwd);
       git(['remote', 'set-url', '--push', 'origin', PUSH_DISABLED], cwd);
       const exclude = [];
-      if (arm === 'with' && localConfigText) {
+      if (arm === 'with') {
         mkdirSync(path.join(cwd, '.claude'), { recursive: true });
         writeFileSync(path.join(cwd, ...LOCAL_CONFIG_REL.split('/')), localConfigText);
         exclude.push(LOCAL_CONFIG_REL);
@@ -236,9 +240,9 @@ export async function runMeasure({
       const args = buildArgs({ arm, model, budgetUsd: budget, pluginDir, settingsFile, allowedTools });
       const run = await runClaude({ spawn, command: claude, args, cwd, input: prompt, timeoutMs: timeoutMin * 60_000, platform });
       if (run.spawnError) {
-        failed = `claude could not be started for the ${arm} arm (${run.spawnError})`;
+        failures.push(`claude could not be started for the ${arm} arm (${run.spawnError})`);
         arms[arm] = { ...parseStream(''), exit: null };
-        log(`[${arm}] ${failed}`);
+        log(`[${arm}] ${failures.at(-1)}`);
         break;
       }
       writeFileSync(`${out}.${arm}.jsonl`, run.stdout);
@@ -250,6 +254,9 @@ export async function runMeasure({
         ...parseStream(run.stdout), exit: run.code, files, approvals: countApprovals(cwd, ref, files),
         timedOut: run.timedOut ? timeoutMin : false,
       };
+      if (run.code !== 0 && !run.timedOut && arms[arm].subtype === null) {
+        failures.push(`the ${arm} arm: claude exited ${run.code ?? 'without a code'} with no result line`);
+      }
       gates[arm] = null;
       if (gate) {
         const { ok, results } = await runGate({ cwd, config: { gate: { gate } }, exec: gateExec });
@@ -258,8 +265,12 @@ export async function runMeasure({
       log(`[${arm}] done: exit ${run.code ?? 'n/a'}${run.timedOut ? ' (timed out)' : ''}, cost ${arms[arm].costUsd ?? 'n/a'} USD`);
     }
   } finally {
-    rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    // a locked file (Windows) must not cost the report: it is written below either way
+    try { rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch (e) {
+      log(`could not delete the temp clones (${e.message}); remove ${work} by hand`);
+    }
   }
+  const failed = failures.length ? failures.join('; ') : null;
   for (const arm of ARMS) arms[arm] ??= { ...parseStream(''), exit: null };
 
   const firstLine = prompt.trim().split(/\r?\n/)[0];

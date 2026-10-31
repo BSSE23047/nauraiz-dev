@@ -157,7 +157,7 @@ test('runMeasure: refuses without a positive budget, above 20 USD without the fl
   }
 });
 
-test('runMeasure: a non-zero claude exit and a missing result line are recorded as FAILED; the gate still runs; clones deleted', async () => {
+test('runMeasure: a non-zero claude exit with no result line fails the run (ok false, report FAILED); the gate still runs; clones deleted', async () => {
   const root = sandbox();
   try {
     const { bare, first } = makeBare(root);
@@ -168,8 +168,11 @@ test('runMeasure: a non-zero claude exit and a missing result line are recorded 
       repo: bare, ref: first, prompt: 'p', model: 'sonnet', budgetUsd: 1, out, gate: 'true', pluginDir: '/p', date: 'd', task: 't',
       spawn: fakeSpawn([], { text: '', code: 1 }), tmpRoot: tmp, log() {}, gateExec: async () => ({ code: 0, output: '' }),
     });
-    assert.equal(res.ok, true);
+    assert.equal(res.ok, false);
+    assert.match(res.failed, /the with arm: claude exited 1 with no result line/);
+    assert.match(res.failed, /the without arm: claude exited 1 with no result line/);
     const md = readFileSync(out, 'utf8');
+    assert.ok(md.startsWith('**FAILED: the with arm: claude exited 1 with no result line'), md.slice(0, 200));
     assert.ok(md.includes('| claude exit code | 1 | 1 |'));
     assert.ok(md.includes('| result | FAILED: no result line in the stream | FAILED: no result line in the stream |'));
     assert.ok(md.includes('| gate | pass | pass |'));
@@ -359,4 +362,64 @@ test('resolveClaude: the directly executable claude wins; win32 falls back to cl
   assert.equal(resolveClaude({ env, platform: 'win32', exists: has(['/a/claude.cmd']) }).split(path.sep).join('/'), '/a/claude.cmd');
   assert.equal(resolveClaude({ env, platform: 'win32', exists: has(['/a/claude.exe', '/a/claude.cmd']) }).split(path.sep).join('/'), '/a/claude.exe');
   assert.equal(resolveClaude({ env, platform: 'linux', exists: () => false }), 'claude');
+});
+
+test('runMeasure: a non-zero exit that still wrote a result line is not a failed run', async () => {
+  const root = sandbox();
+  try {
+    const { bare, first } = makeBare(root);
+    const tmp = path.join(root, 'tmp');
+    mkdirSync(tmp);
+    const res = await runMeasure({
+      repo: bare, ref: first, prompt: 'p', model: 'sonnet', budgetUsd: 1, out: path.join(root, 'r.md'), pluginDir: '/p', date: 'd', task: 't',
+      spawn: fakeSpawn([], { code: 1 }), tmpRoot: tmp, log() {},
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.failed, null);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('runMeasure: without --local-config the with clone gets a guided local config holding the --gate command, or {} without a gate', async () => {
+  for (const [gate, expected] of [['npm test', { gate: { gate: 'npm test' } }], [undefined, {}]]) {
+    const root = sandbox();
+    try {
+      const { bare, first } = makeBare(root);
+      const tmp = path.join(root, 'tmp');
+      mkdirSync(tmp);
+      const calls = [];
+      const out = path.join(root, 'r.md');
+      await runMeasure({
+        repo: bare, ref: first, prompt: 'p', model: 'sonnet', budgetUsd: 1, out, gate, pluginDir: '/p', date: 'd', task: 't',
+        spawn: fakeSpawn(calls), tmpRoot: tmp, log() {}, gateExec: async () => ({ code: 0, output: '' }),
+      });
+      const [w, wo] = calls;
+      assert.deepEqual(JSON.parse(w.localConfig), expected, String(gate));
+      assert.equal(wo.localConfig, null);
+      assert.ok(readFileSync(out, 'utf8').includes('| files touched | none | none |'), 'the written local config is not counted as touched');
+    } finally {
+      cleanup(root);
+    }
+  }
+});
+
+test('runMeasure: a failure to delete the temp clones never loses the report', async () => {
+  const root = sandbox();
+  try {
+    const { bare, first } = makeBare(root);
+    const tmp = path.join(root, 'tmp');
+    mkdirSync(tmp);
+    const out = path.join(root, 'r.md');
+    const logs = [];
+    const res = await runMeasure({
+      repo: bare, ref: first, prompt: 'p', model: 'sonnet', budgetUsd: 1, out, pluginDir: '/p', date: 'd', task: 't',
+      spawn: fakeSpawn([]), tmpRoot: tmp, log: (l) => logs.push(l), rm: () => { throw new Error('EBUSY: locked'); },
+    });
+    assert.equal(res.ok, true);
+    assert.ok(existsSync(out));
+    assert.ok(logs.some((l) => /could not delete the temp clones/.test(l) && /EBUSY/.test(l)), logs.join('\n'));
+  } finally {
+    cleanup(root);
+  }
 });
