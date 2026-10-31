@@ -114,7 +114,18 @@ The gate runner (`scripts/gate/run.mjs`, called by the `gate` skill) runs each `
 
 ## Numbers
 
-None yet. Every number this plugin quotes will come from a `measure` report in `docs/measure/`, and there are no reports there yet.
+Every number here comes from a `measure` report in [`docs/measure/`](docs/measure/). So far there is one task, measured twice: [OpsiMate #1040](https://github.com/OpsiMate/OpsiMate/issues/1040), a small, fully specified issue (add tests for alert comments) that nobody owned, run on sonnet with the same plain prompt for both arms.
+
+| Report | Plugin | Result and gate | Weighted tokens (with / without) | Turns (with / without) | Time (with / without) |
+|---|---|---|---|---|---|
+| [2026-10-31](docs/measure/2026-10-31-opsimate-1040.md) | 0.2.2 | both pass | 363,704 / 289,494 | 50 / 35 | 227 s / 215 s |
+| [2026-11-01](docs/measure/2026-11-01-opsimate-1040.md) | 0.2.3 | both pass | 291,342 / 217,277 | 46 / 22 | 201 s / 300 s |
+
+What this shows, and what it does not:
+
+- On a small, clear task the plugin gives the same result for about a quarter to a third more tokens. Both arms wrote the same tests and flagged the same open decision.
+- The plugin's own steps cost three tool calls after 0.2.3 (load `start-task`, one pre-flight, one gate run). 0.2.2 spent eight; 0.2.3 cut the rest. The remaining gap is working style (more, smaller reads and more checks) and run-to-run noise: the same arm varied by about 25% between the two runs.
+- It does not show what the plugin is for. This issue had no open decisions, touched no shared code and was owned by nobody, and a headless run cannot ask you anything, so the ownership stop, the questions and the approval check never came into play.
 
 `/nauraiz-dev:measure` runs one task twice, headless: once with this plugin switched off and once with it on, each in a fresh clone, on the same model, with the same plain prompt a developer would type:
 
@@ -140,7 +151,7 @@ CI runs on Windows and macOS with Node 22 and 24.
 - The collision check needs the GitHub CLI, signed in. Without it the answer is "unknown" and you are asked.
 - Only hooks are enforced. Skills and `CLAUDE.md` are advice the model can ignore.
 - The evals ran without superpowers loaded, so how the skills trigger alongside superpowers is not yet measured. See [the eval summaries](evals/results/).
-- Whether `start-task` improves outcomes is not yet measured. That is what `measure` is for.
+- `start-task` has been measured on one small, clear task only (see [Numbers](#numbers)): same outcome, more tokens. It has not been measured on ambiguous, shared or already-owned work, which is where it is meant to help.
 - The plugin icon is a placeholder.
 
 ## What this is not
