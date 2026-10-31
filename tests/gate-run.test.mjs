@@ -6,7 +6,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, realpathSync } from 'node:fs';
-import { runGate, substitute, formatGate, FAIL_SUMMARY, main, findProjectRoot } from '../scripts/gate/run.mjs';
+import { runGate, substitute, formatGate, FAIL_SUMMARY, main } from '../scripts/gate/run.mjs';
+import { findProjectRoot, gitTopLevel } from '../scripts/lib/root.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fxGate = path.join(here, 'fixtures', 'gate');
@@ -293,4 +294,42 @@ test('CLI: started in a subfolder of the project it still runs the gate and name
     assert.match(r.stdout, /\| a \| pass \| 0 \|/);
     assert.ok(r.stderr.includes(`nauraiz-dev gate: project root ${root}`), r.stderr);
   } finally { rmSync(top, { recursive: true, force: true }); }
+});
+
+test('findProjectRoot: stops at a .git entry when git cannot report the top-level (fails closed)', () => {
+  const { top, root, sub } = tree();
+  try {
+    const inner = path.join(root, 'vendor', 'lib');
+    mkdirSync(path.join(inner, '.git'), { recursive: true });
+    mkdirSync(path.join(inner, 'src'), { recursive: true });
+    assert.equal(findProjectRoot(path.join(inner, 'src'), () => null), path.join(inner, 'src'), 'the parent config is not picked up past a .git folder');
+    // a config in the folder that holds .git still counts: the config check comes first
+    mkdirSync(path.join(inner, '.claude'));
+    writeFileSync(path.join(inner, '.claude', 'nauraiz-dev.local.json'), '{}');
+    assert.equal(findProjectRoot(path.join(inner, 'src'), () => null), inner);
+    // a .git file (worktree or submodule) stops the walk too
+    writeFileSync(path.join(sub, '.git'), 'gitdir: elsewhere');
+    assert.equal(findProjectRoot(sub, () => null), sub);
+  } finally { rmSync(top, { recursive: true, force: true }); }
+});
+
+test('gitTopLevel: a real git repo reports its top-level from a subfolder, and the walk uses it', () => {
+  const dir = realpathSync.native(tmp());
+  try {
+    assert.equal(spawnSync('git', ['init', '-q', dir], { encoding: 'utf8' }).status, 0);
+    mkdirSync(path.join(dir, 'a', 'b'), { recursive: true });
+    const top = gitTopLevel(path.join(dir, 'a', 'b'));
+    assert.ok(top, 'a top-level');
+    assert.equal(realpathSync.native(top).toLowerCase(), dir.toLowerCase());
+    mkdirSync(path.join(dir, '.claude'));
+    writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.json'), '{}');
+    assert.equal(realpathSync.native(findProjectRoot(path.join(dir, 'a', 'b'))).toLowerCase(), dir.toLowerCase());
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('main: --cwd with no value falls back to the current folder instead of throwing', async () => {
+  const err = [];
+  const code = await main(['--cwd'], { out: () => {}, err: (s) => err.push(s), start: here, gitTop: () => null, run: async () => ({ ok: true, results: [] }) });
+  assert.notEqual(code, 3, err.join('\n'));
+  assert.ok(err.includes(`nauraiz-dev gate: project root ${process.cwd()}`));
 });

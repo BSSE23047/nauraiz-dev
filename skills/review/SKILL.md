@@ -39,7 +39,8 @@ no shell and works from the diff file; it returns findings by severity.
 3. Dispatch the reviewer on `<diff>`. Meanwhile run
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"` once, from any folder in the project
    (it prints every exit code: never append `echo $?`, pipes or `cd`; re-run only after you
-   changed code). Exit 2: as the `gate` skill says.
+   changed code, or once with `--plan <path>` when a row says `no plan for this branch`).
+   Exit 2: as the `gate` skill says.
 4. Report: the findings ranked by severity, the gate output verbatim, what was not
    checked. End with what to fix before `/nauraiz-dev:ship`, or "No blocking findings".
    Do not fix anything unless the owner asks. Stop.

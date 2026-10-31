@@ -46,9 +46,9 @@ Rules for every step:
    - `unknown`: ask the owner whether to go on, quoting the `reason`. Wait.
    - `ours` or `free`: say the verdict in one line and go on.
 
-3. **Base check.** Read `base`. `fetched` false: say so (its `reason`) and go on.
-   `behind` not 0: say "<n> commits behind origin/<base>" and, if `ahead` is 0 (no
-   commits of its own), add "recreate it on origin/<base>?". Go on; recreate only on a yes.
+3. **Base check.** Read `base`. `behind` null (`fetched` false, or the count failed): say its
+   `reason` and go on. `behind` above 0: say "<n> commits behind origin/<base>" and, if `ahead`
+   is 0 (no commits of its own), add "recreate it on origin/<base>?". Go on; recreate only on a yes.
 
 4. **Triage.** Size the task and say the size and the model `models.<size>` in one line;
    if this session runs another model, say so. Small: one or two files, an obvious change
@@ -85,6 +85,6 @@ Rules for every step:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" --plan <plan path>` (exit 0 all
    pass, 1 a failure, 2 no gate configured). Run it once, from any folder in the project;
    it prints every command's exit code itself, so never append `echo $?`, pipes or `cd`.
-   Re-run only after you changed code. Read the table; never call anything green that
+   Re-run only after you changed code, or once with `--plan <path>` when a row says `no plan for this branch`. Read the table; never call anything green that
    failed or did not run. Report: what was built, the gate table, decisions to confirm,
    risks, anything unverified. Offer `ship` only if the owner authorised a PR this session.

@@ -59,14 +59,14 @@ Rules for every step:
    untracked plan in local mode. Committing before the gate makes the pushed HEAD the
    gated HEAD with no rewrite. That covers tracked files only: an untracked file the gate reads is not pushed; tell the owner to add it or ignore it.
 
-5. **Gate.** Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" --plan <plan>` (no plan:
-   drop `--plan`) once, from any folder in the project; it prints every exit code, so
-   never append `echo $?`, pipes or `cd`; re-run only after you changed code. Exit 1:
-   stop and paste the output. Exit 2: quote every `nauraiz-dev:`
-   line first. A line other than `no gate configured …` that names a config file means
-   the config failed to load: stop, say it needs fixing, and never offer to ship without a gate.
-   Otherwise ask "No gate configured. Ship without one?". Exit 3 (the runner failed): stop
-   and quote the output. Any other non-zero exit: the same. Keep the output for step 6.
+5. **Gate.** Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" --plan <plan>` (no plan: drop
+   `--plan`) once, from any folder in the project; it prints every exit code, so never append
+   `echo $?`, pipes or `cd`; re-run only after you changed code, or once with `--plan <path>` when a
+   row says `no plan for this branch`. Exit 1: stop and paste the output. Exit 2: quote every
+   `nauraiz-dev:` line first. A line other than `no gate configured …` that names a config file
+   means the config failed to load: stop, say it needs fixing, and never offer to ship without a
+   gate. Otherwise ask "No gate configured. Ship without one?". Exit 3 (the runner failed): stop and
+   quote the output. Any other non-zero exit: the same. Keep the output for step 6.
 
 6. **PR body.** If `gh pr view <branch> --json url,state` shows an `OPEN` PR, skip this
    step. Headings, first match wins:

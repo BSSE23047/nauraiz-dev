@@ -2,16 +2,8 @@
 
 ## Triage
 
-- **small**: one or two files and an obvious change (a typo, copy, a config value, a
-  rename, a one-line bug with a known cause). No design, no issue needed. Do it, verify,
-  report.
-- **normal**: an issue or a behaviour change inside one area, about 3 to 10 files, and the
-  issue plus the code make the design clear. grill, plan, test-driven build, gate.
-- **large**: a feature across areas, a new schema, API, shared seam or dependency, more
-  than ~10 files, or the issue says the design is open. grill, design, plan,
-  subagent-driven build, gate, review.
-
-Torn between two sizes: pick the larger.
+The size rules (small, normal, large) are in `SKILL.md`, step 4. This file is read only for
+a normal or large task, once, at step 6.
 
 ## Routing
 

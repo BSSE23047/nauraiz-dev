@@ -12,12 +12,12 @@ not a summary line.
 
 "Stop" means: end your turn with the report and wait.
 
-1. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"` 
-   once, from any folder in the project; it prints every command's exit code itself,
-   so never append `echo $?`, pipes or `cd`. Re-run only after you changed code. Write it
-   exactly like that, forward slashes included. Add `--plan <path>` when you know the task's plan (without it the
-   runner looks for the plan of the current branch). Add `--only <name,name>` only when
-   asked for some of the commands. The first stderr line,
+1. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"` exactly like that, forward
+   slashes included, once, from any folder in the project; it prints every command's
+   exit code itself, so never append `echo $?`, pipes or `cd`. Re-run only after you changed code, or once with `--plan <path>` when a row says `no plan for this branch`. Add
+   `--plan <path>` when you know the task's plan (relative paths are relative to the
+   project root; without it the runner looks for the plan of the current branch). Add
+   `--only <name,name>` only when asked for some of the commands. The first stderr line,
    `nauraiz-dev gate: project root <dir>`, says where it ran.
 2. A `nauraiz-dev:` line printed before the table names a config problem: quote it in
    the report whatever the exit code. Read the exit code:

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -38,13 +38,14 @@ function ghStub({ me = 'me-dev', issue = ISSUE, prs = [], headPrs = [] } = {}) {
 }
 
 /** git stub: fetch result, behind/ahead counts, ls-remote output. Records every call. */
-function gitStub({ fetch = ok(), behind = '0\n', ahead = '2\n', remote = '' } = {}) {
+function gitStub({ fetch = ok(), behind = '0\n', ahead = '2\n', remote = '', log = '' } = {}) {
   const calls = [];
   const git = (args) => {
     calls.push(args);
     if (args[0] === 'config') return ok(args[1] === 'user.name' ? 'Me Dev\n' : 'me@x.io\n');
     if (args[0] === 'ls-remote') return ok(remote);
     if (args[0] === 'fetch') return fetch;
+    if (args[0] === 'log') return ok(log);
     if (args[0] === 'rev-list' && args[2]?.startsWith('HEAD..')) return typeof behind === 'string' ? ok(behind) : behind;
     if (args[0] === 'rev-list') return typeof ahead === 'string' ? ok(ahead) : ahead;
     if (args[0] === 'rev-parse') return bad(''); // resolveBase: no such local ref -> origin/<base>
@@ -181,6 +182,34 @@ test('truncation: body and each comment are cut at 4000 chars with a marker; sho
   assert.equal(exact.issue.body.length, 4000, 'exactly 4000 is not cut');
 });
 
+test('remote branch exists: the collision check fetches it too, so there are two fetches (branch, then base)', async () => {
+  const git = gitStub({ remote: 'abc123\trefs/heads/feature/27-export\n', log: '' });
+  const r = await run({ gh: ghStub(), git });
+  assert.equal(r.collision.verdict, 'free');
+  assert.equal(r.collision.remoteBranch.exists, true);
+  // checkCollision runs `git fetch origin <branch>` to read the branch's authors; preflight then fetches the base once.
+  assert.deepEqual(git.calls.filter((a) => a[0] === 'fetch'), [['fetch', 'origin', 'feature/27-export'], ['fetch', 'origin', 'main']]);
+  assert.equal(r.base.fetched, true);
+});
+
+test('behind null after a good fetch (unreadable count) is reported with a reason, not as 0', async () => {
+  const r = await run({ gh: ghStub(), git: gitStub({ behind: ok('garbage') }) });
+  assert.equal(r.base.fetched, true);
+  assert.equal(r.base.behind, null);
+  assert.match(r.base.reason, /could not count commits behind origin\/main/);
+});
+
+test('an unreadable config file is tolerated in the exported function (defaults are used)', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-preflight-'));
+  try {
+    mkdirSync(path.join(dir, '.claude'));
+    writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.json'), '{ not json');
+    const r = await preflight({ issue: 27, cwd: dir, gh: ghStub(), git: gitStub() });
+    assert.equal(r.base.name, 'main');
+    assert.equal(r.collision.verdict, 'free');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('--branch is passed through to the collision check', async () => {
   const git = gitStub({ remote: '' });
   const r = await run({ gh: ghStub(), git, branch: 'feature/27-mine' });
@@ -198,4 +227,19 @@ test('CLI: prints one JSON object and exits 0 even when nothing works (no issue 
     assert.equal(out.collision.verdict, 'unknown');
     assert.equal(out.base.fetched, false);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('CLI: started in a subfolder it loads the config of the project root (branch.base from the root file)', () => {
+  const top = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'nd-preflight-')));
+  try {
+    mkdirSync(path.join(top, '.claude'));
+    mkdirSync(path.join(top, 'apps', 'server'), { recursive: true });
+    writeFileSync(path.join(top, '.claude', 'nauraiz-dev.json'), JSON.stringify({ branch: { base: 'develop' } }));
+    const sub = path.join(top, 'apps', 'server');
+    const r = spawnSync(process.execPath, [cli], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+    assert.equal(r.status, 0);
+    assert.equal(JSON.parse(r.stdout).base.name, 'develop');
+    const none = spawnSync(process.execPath, [cli, '--cwd'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+    assert.equal(none.status, 0, '--cwd without a value does not throw');
+  } finally { rmSync(top, { recursive: true, force: true }); }
 });

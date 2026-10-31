@@ -3,6 +3,7 @@ import path from 'node:path';
 import { isMain } from '../lib/main.mjs';
 import { loadConfig } from '../lib/config.mjs';
 import { resolveBase } from '../lib/base.mjs';
+import { findProjectRoot } from '../lib/root.mjs';
 import { checkCollision, spawnRunner } from './collision.mjs';
 
 const MAX_TEXT = 4000;
@@ -77,7 +78,10 @@ function baseStatus(git, cwd, name) {
 export async function preflight({ issue, branch, cwd = process.cwd(), config, gh, git } = {}) {
   const n = Number(String(issue ?? '').replace(/^#/, ''));
   const valid = Number.isInteger(n) && n > 0;
-  const cfg = config ?? loadConfig(cwd).config;
+  let cfg = config;
+  if (!cfg) {
+    try { cfg = loadConfig(cwd).config; } catch { cfg = {}; }
+  }
   const baseName = cfg?.branch?.base || 'main';
   const runGh = gh ?? spawnRunner('gh', [], cwd);
   const runGit = git ?? spawnRunner('git', ['-C', cwd], cwd);
@@ -129,13 +133,13 @@ export async function preflight({ issue, branch, cwd = process.cwd(), config, gh
 }
 
 function parseArgs(argv) {
-  const opts = { issue: undefined, branch: undefined, cwd: process.cwd() };
+  const opts = { issue: undefined, branch: undefined, cwd: undefined };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s);
     const value = () => (inline !== undefined ? inline : argv[++i]);
     if (flag === '--branch') opts.branch = value();
-    else if (flag === '--cwd') opts.cwd = path.resolve(value() ?? opts.cwd);
+    else if (flag === '--cwd') opts.cwd = path.resolve(value() ?? process.cwd());
     else rest.push(argv[i]);
   }
   opts.issue = rest[0]?.replace(/^#/, '');
@@ -145,7 +149,9 @@ function parseArgs(argv) {
 if (isMain(import.meta.url)) {
   let out;
   try {
-    out = await preflight(parseArgs(process.argv.slice(2)));
+    const opts = parseArgs(process.argv.slice(2));
+    // Without --cwd, run from the project root (the nearest folder with a nauraiz-dev config), like the gate.
+    out = await preflight({ ...opts, cwd: opts.cwd ?? findProjectRoot(process.cwd()) });
   } catch (e) {
     out = {
       issue: null,

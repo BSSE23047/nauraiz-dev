@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { isMain } from '../lib/main.mjs';
 import { loadConfig } from '../lib/config.mjs';
+import { findProjectRoot } from '../lib/root.mjs';
 
 const TIMEOUT_MS = 30000;
 const BRANCH_IN_BODY = /Branch:\s*`([^`]+)`/;
@@ -214,7 +215,7 @@ function parseArgs(argv) {
 
 if (isMain(import.meta.url)) {
   const { issue, branch } = parseArgs(process.argv.slice(2));
-  const cwd = process.cwd();
+  const cwd = findProjectRoot(process.cwd()); // the nearest folder with a nauraiz-dev config, like the gate
   let out;
   try {
     out = await checkCollision({ issue, branch, cwd });
