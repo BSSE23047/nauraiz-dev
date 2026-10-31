@@ -12,7 +12,7 @@ import { isMain } from '../lib/main.mjs';
 import { findRecordedApprovals } from '../lib/decide-edit.mjs';
 import { runGate } from '../gate/run.mjs';
 import {
-  DEFAULT_ALLOWED_TOOLS, PUSH_DISABLED, buildArgs, createTokenCounter, formatReport, parseStream, settingsJson, tokenCapNotEnforced, totalTokens,
+  DEFAULT_ALLOWED_TOOLS, PUSH_DISABLED, buildArgs, createTokenCounter, formatReport, parseStream, settingsJson, tokenCapNotEnforced, weightedTokens,
 } from './parse.mjs';
 
 const ARMS = ['with', 'without'];
@@ -288,8 +288,8 @@ export function scanLeaks({ files, pluginDir, tmpRoot, home = homedir() }) {
 
 /**
  * Run both arms and write `<out>`, `<out>.with.jsonl`, `<out>.without.jsonl`.
- * Refuses (before touching anything) unless at least one cap is given: `maxTokens` (a positive integer,
- * per arm; above 20,000,000 only with `allowHighBudget`) and/or `budgetUsd` (a positive number, per arm;
+ * Refuses (before touching anything) unless at least one cap is given: `maxTokens` (a positive integer of
+ * weighted tokens, cache reads at 0.1, per arm; above 20,000,000 only with `allowHighBudget`) and/or `budgetUsd` (a positive number, per arm;
  * above 20 only with `allowHighBudget`). Both given: both apply. The approximate totals are 2 x each cap.
  * The token cap is enforced here: the arm's stdout is counted as it streams and the arm is killed (like
  * the timeout) when the count reaches it; it is then marked `stoppedAtTokenCap`, keeps its partial stream
@@ -347,7 +347,7 @@ export async function runMeasure({
   if (hasBudget) {
     log(`Approximate total cap: ${totalCapUsd} USD (${ARMS.length} arms x ${budgetUsd} USD, --max-budget-usd per arm; the CLI may overshoot slightly). One run per arm.`);
   }
-  if (hasTokens) log(`Token cap: ${maxTokens} per arm (${totalCapTokens} total)`);
+  if (hasTokens) log(`Token cap: ${maxTokens} weighted tokens per arm (${totalCapTokens} total; cache reads count 0.1)`);
   const capsText = [hasTokens ? `${maxTokens} tokens` : null, hasBudget ? `${budgetUsd} USD` : null].filter(Boolean).join(' and ');
 
   mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
@@ -407,7 +407,7 @@ export async function runMeasure({
       const run = await runClaude({
         spawn, command: claude, args, cwd, input: prompt, timeoutMs: timeoutMin * 60_000, platform,
         maxTokens: hasTokens ? maxTokens : 0,
-        onTokenCap: (total) => log(`[${arm}] token cap reached (${total} of ${maxTokens}); stopping claude`),
+        onTokenCap: (total) => log(`[${arm}] token cap reached (${total} of ${maxTokens} weighted tokens); stopping claude`),
       });
       if (run.spawnError) {
         failures.push(`claude could not be started for the ${arm} arm (${run.spawnError})`);
@@ -428,7 +428,7 @@ export async function runMeasure({
         failures.push(`the ${arm} arm: claude exited ${run.code ?? 'without a code'} with no result line`);
       }
       if (hasTokens && tokenCapNotEnforced(arms[arm], maxTokens)) {
-        warnings.push(`the ${arm} arm: token cap reached but the arm was not stopped (${totalTokens(arms[arm])} tokens counted, cap ${maxTokens})`);
+        warnings.push(`the ${arm} arm: token cap reached but the arm was not stopped (${weightedTokens(arms[arm])} weighted tokens counted, cap ${maxTokens})`);
         log(`[${arm}] WARNING: ${warnings.at(-1)}`);
       }
       gates[arm] = null;

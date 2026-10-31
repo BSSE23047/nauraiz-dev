@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseStream, buildArgs, formatReport, settingsJson, createTokenCounter, tokenCapNotEnforced, totalTokens, DEFAULT_ALLOWED_TOOLS } from '../scripts/measure/parse.mjs';
+import { parseStream, buildArgs, formatReport, settingsJson, createTokenCounter, tokenCapNotEnforced, totalTokens, rawTokens, weightedTokens, DEFAULT_ALLOWED_TOOLS } from '../scripts/measure/parse.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const stream = readFileSync(path.join(here, 'fixtures', 'measure', 'stream.jsonl'), 'utf8');
@@ -20,6 +20,8 @@ test('parseStream: totals, usage deduped by message id, tolerant of bad and unkn
   assert.equal(r.subtype, 'success');
   assert.equal(r.isError, false);
   assert.equal(r.pluginCopies, 1);
+  assert.equal(r.outputEstimated, false, 'the result line carries real usage');
+  assert.equal(r.msFromStream, false);
 });
 
 test('parseStream: turns fall back to distinct assistant message ids; no result line gives null time and cost', () => {
@@ -33,7 +35,7 @@ test('parseStream: turns fall back to distinct assistant message ids; no result 
 test('parseStream: empty and garbage input give zeros, never throw', () => {
   for (const text of ['', '\n\nnope\n{"type":', undefined]) {
     const r = parseStream(text);
-    assert.deepEqual(r, { ms: null, costUsd: null, tokens: { output: 0, cacheRead: 0, cacheWrite: 0, input: 0 }, skills: [], questions: 0, edits: [], turns: 0, subtype: null, isError: false, pluginCopies: 0 });
+    assert.deepEqual(r, { ms: null, msFromStream: false, costUsd: null, tokens: { output: 0, cacheRead: 0, cacheWrite: 0, input: 0 }, outputEstimated: false, skills: [], questions: 0, edits: [], turns: 0, subtype: null, isError: false, pluginCopies: 0 });
   }
 });
 
@@ -56,7 +58,10 @@ test('buildArgs: prompt not in argv, shared safety flags, settings file for both
 test('default allowed tools: the owner-ruled list, read-only gh, no push', () => {
   const tools = DEFAULT_ALLOWED_TOOLS;
   for (const t of ['Read', 'Glob', 'Grep', 'Bash(npm *)', 'Bash(git commit *)', 'Bash(pnpm *)', 'Bash(yarn *)', 'Bash(gh issue view *)', 'Bash(gh search *)']) assert.ok(tools.includes(t), t);
-  assert.doesNotMatch(tools, /git push|gh pr create|gh api|Write|Edit/);
+  const words = tools.split(' ');
+  for (const t of ['Skill', 'Agent', 'AskUserQuestion', 'TodoWrite']) assert.ok(words.includes(t), `${t} must be allowed: under claude -p a tool that is not allowed is denied`);
+  assert.doesNotMatch(tools, /git push|gh pr create|gh api/);
+  assert.doesNotMatch(tools, /(^| )(Write|Edit|MultiEdit)( |$)/, 'no edit tool is pre-allowed: acceptEdits covers edits');
 });
 
 const fullArm = (extra = {}) => ({ ...parseStream(stream), files: ['src/a.js', 'src/b.js'], approvals: 2, exit: 0, ...extra });
@@ -73,13 +78,15 @@ test('formatReport: a table of every field per arm, the commands, safety, gate r
   assert.match(md, /^# Measure: Issue 7/m);
   assert.match(md, /2026-10-31/);
   assert.ok(md.includes('| metric | with | without |'), "| metric | with | without |");
-  for (const row of ['result', 'time', 'cost (USD)', 'output tokens', 'cache read tokens', 'cache write tokens', 'input tokens', 'turns',
+  for (const row of ['result', 'time', 'cost (USD)', 'output tokens', 'cache read tokens', 'cache write tokens', 'input tokens', 'tokens (weighted: cache reads at 0.1)', 'tokens (raw)', 'turns',
     'questions (AskUserQuestion calls only)', 'skills invoked', 'nauraiz-dev copies loaded', 'files touched', 'approvals recorded', 'gate', 'claude exit code']) {
     assert.ok(md.includes(`| ${row} |`), `row ${row}`);
   }
   assert.ok(md.includes('| result | success | success |'), "| result | success | success |");
   assert.ok(md.includes('| time | 61.0 s | 90.5 s |'), "| time | 61.0 s | 90.5 s |");
   assert.ok(md.includes('| output tokens | 150 | 150 |'), "| output tokens | 150 | 150 |");
+  assert.ok(md.includes('| tokens (weighted: cache reads at 0.1) | 918 | 918 |'), md);
+  assert.ok(md.includes('| tokens (raw) | 4968 | 4968 |'), md);
   assert.ok(md.includes('| skills invoked | nauraiz-dev:start-task, nauraiz-dev:grill | none |'), "| skills invoked | nauraiz-dev:start-task, nauraiz-dev:grill | none |");
   assert.ok(md.includes('| nauraiz-dev copies loaded | 1 | 0 |'), "| nauraiz-dev copies loaded | 1 | 0 |");
   assert.ok(md.includes('| files touched | src/a.js, src/b.js | none |'), "| files touched | src/a.js, src/b.js | none |");
@@ -136,10 +143,13 @@ test('createTokenCounter: sums input, output, cache creation and cache read, onc
   const c = createTokenCounter();
   assert.equal(c.total(), 0);
   const m1 = usageLine('m1', { input_tokens: 1, output_tokens: 20, cache_creation_input_tokens: 300, cache_read_input_tokens: 4000 });
-  assert.equal(c.feed(`${m1}\n`), 4321);
-  assert.equal(c.feed(`${m1}\n${m1}\n`), 4321, 'a repeated message id is not counted again');
-  assert.equal(c.feed(`${usageLine('m2', { input_tokens: 9, output_tokens: 1 })}\n`), 4331);
-  assert.equal(c.total(), 4331);
+  assert.equal(c.feed(`${m1}\n`), 721, 'weighted: 1 + 20 + 300 + 0.1 x 4000');
+  assert.equal(c.raw(), 4321);
+  assert.equal(c.weighted(), 721);
+  assert.equal(c.feed(`${m1}\n${m1}\n`), 721, 'a repeated message id is not counted again');
+  assert.equal(c.feed(`${usageLine('m2', { input_tokens: 9, output_tokens: 1, cache_read_input_tokens: 5 })}\n`), 731, 'weighted rounds down: 721 + 10 + 0.5');
+  assert.equal(c.raw(), 4336);
+  assert.equal(c.total(), 731);
 });
 
 test('createTokenCounter: a later line for the same id replaces the earlier usage (the same rule as parseStream)', () => {
@@ -162,10 +172,13 @@ test('createTokenCounter: lines split across chunks, bad lines, non-assistant li
   assert.equal(junk.feed(usageLine('m', { output_tokens: 'x', input_tokens: -1 })), 0);
 });
 
-test('createTokenCounter: agrees with parseStream on the fixture stream', () => {
+test('createTokenCounter: agrees with parseStream (raw and weighted) on the fixture stream without its result line', () => {
+  const noResult = stream.split('\n').filter((l) => !l.includes('"type":"result"')).join('\n');
   const c = createTokenCounter();
-  const t = parseStream(stream).tokens;
-  assert.equal(c.feed(stream), t.output + t.cacheRead + t.cacheWrite + t.input);
+  const parsed = parseStream(noResult);
+  assert.equal(c.feed(noResult), weightedTokens(parsed));
+  assert.equal(c.raw(), rawTokens(parsed));
+  assert.equal(parsed.outputEstimated, true);
 });
 
 test('buildArgs: --max-budget-usd is left out when there is no budget (token cap only)', () => {
@@ -178,22 +191,23 @@ test('formatReport: the token cap in the header, a stopped-at-token-cap row, no 
   const capped = fullArm({ stoppedAtTokenCap: true, subtype: null });
   const ok = fullArm();
   const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: capped, without: ok }, maxTokens: 2000000, budgetUsd: null });
-  assert.match(md, /^Date: d\. Model: m\. Token cap: 2000000 per arm\.$/m);
+  assert.match(md, /^Date: d\. Model: m\. Token cap: 2000000 weighted tokens per arm \(cache reads count 0\.1\)\.$/m);
   assert.ok(md.includes('| stopped at token cap | yes | no |'), md);
   assert.ok(md.includes('| result | FAILED: stopped at the token cap | success |'), md);
   assert.ok(!md.includes('--max-budget-usd'));
   assert.ok(!md.includes('<budget>'));
   const both = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: ok, without: ok }, maxTokens: 500, budgetUsd: 3 });
-  assert.match(both, /Token cap: 500 per arm\. Budget cap: 3 USD per arm\./);
+  assert.match(both, /Token cap: 500 weighted tokens per arm \(cache reads count 0\.1\)\. Budget cap: 3 USD per arm\./);
   assert.match(both, /--max-budget-usd 3/);
   const none = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: ok, without: ok }, budgetUsd: 3 });
   assert.ok(none.includes('| stopped at token cap | no | no |'));
   assert.ok(!none.includes('Token cap:'), 'no token cap line when none is set');
 });
 
-test('measure skill: explains both caps, the 2,000,000 token default and confirms whichever caps apply', () => {
+test('measure skill: explains both caps, the weighted 1,500,000 token default and confirms whichever caps apply', () => {
   const text = readFileSync(path.join(here, '..', 'skills', 'measure', 'SKILL.md'), 'utf8');
-  for (const needle of ['--max-tokens', '2,000,000', '--budget', 'subscription', 'API billing']) assert.ok(text.includes(needle), `skill must mention ${needle}`);
+  assert.ok(!text.includes('2,000,000'), 'the old raw default is gone');
+  for (const needle of ['--max-tokens', '1,500,000', 'weighted', 'cache reads count 0.1', '--budget', 'subscription', 'API billing']) assert.ok(text.includes(needle), `skill must mention ${needle}`);
 });
 
 test('formatReport: no --max-budget-usd in the commands without a budget (undefined or null), no <budget> placeholder', () => {
@@ -206,13 +220,14 @@ test('formatReport: no --max-budget-usd in the commands without a budget (undefi
 });
 
 test('tokenCapNotEnforced / formatReport: a finished stream that counts the cap without a stop gets a WARNING banner', () => {
-  const arm = fullArm(); // 18 + 150 + 4500 + 300 = 4968 tokens
+  const arm = fullArm(); // raw 18 + 150 + 4500 + 300 = 4968; weighted 18 + 150 + 300 + 450 = 918
   assert.equal(totalTokens(arm), 4968);
-  assert.equal(tokenCapNotEnforced(arm, 4968), true);
-  assert.equal(tokenCapNotEnforced(arm, 4969), false);
+  assert.equal(weightedTokens(arm), 918);
+  assert.equal(tokenCapNotEnforced(arm, 918), true);
+  assert.equal(tokenCapNotEnforced(arm, 919), false, 'the cap is checked against weighted tokens, not raw');
   assert.equal(tokenCapNotEnforced({ ...arm, stoppedAtTokenCap: true }, 100), false, 'a stopped arm is not a surprise');
   assert.equal(tokenCapNotEnforced(arm, undefined), false);
-  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: arm, without: arm }, maxTokens: 100, warnings: ['the with arm: token cap reached but the arm was not stopped (4968 tokens counted, cap 100)'] });
+  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: arm, without: arm }, maxTokens: 100, warnings: ['the with arm: token cap reached but the arm was not stopped (918 weighted tokens counted, cap 100)'] });
   assert.ok(md.startsWith('**WARNING: the with arm: token cap reached but the arm was not stopped'), md.slice(0, 120));
 });
 
@@ -228,4 +243,99 @@ test('formatReport: with --setup the safety paragraph and notes say the setup is
 test('measure skill: the run line has optional caps, a capped arm is called partial, and the setup limits are stated', () => {
   const text = readFileSync(path.join(here, '..', 'skills', 'measure', 'SKILL.md'), 'utf8');
   for (const needle of ['[--max-tokens <n>] [--budget <usd>]', 'is partial', 'outside the allowed-tools list', 'killed after `--timeout-min`']) assert.ok(text.includes(needle), needle);
+});
+
+// a stream shaped like the real one: one message id repeated on one line per content block, each line carrying the
+// message_start usage (output_tokens 3), thinking_tokens events (cumulative per block, with a delta), timestamps, no result line
+const tsLine = (type, ts, extra) => JSON.stringify({ type, timestamp: ts, ...extra });
+const realUsage = { input_tokens: 4, output_tokens: 3, cache_creation_input_tokens: 100, cache_read_input_tokens: 2000 };
+const thinkEvent = (estimated, delta) => JSON.stringify({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: estimated, estimated_tokens_delta: delta });
+const blockLine = (id, ts, block) => tsLine('assistant', ts, { message: { id, usage: realUsage, content: [block] } });
+const realShaped = [
+  JSON.stringify({ type: 'system', subtype: 'init', plugins: [] }),
+  thinkEvent(50, 50),
+  thinkEvent(201, 151),
+  blockLine('msg_A', '2026-10-31T08:00:00.000Z', { type: 'thinking', thinking: '', signature: '' }),
+  blockLine('msg_A', '2026-10-31T08:00:01.000Z', { type: 'text', text: 'x'.repeat(40) }),
+  blockLine('msg_A', '2026-10-31T08:00:01.000Z', { type: 'text', text: 'x'.repeat(40) }), // the same line twice: counted once
+  blockLine('msg_A', '2026-10-31T08:00:02.000Z', { type: 'tool_use', id: 'toolu_a', name: 'Bash', input: { command: 'ls' } }), // input JSON is 16 chars
+  tsLine('user', '2026-10-31T08:00:03.000Z', { message: { role: 'user', content: [] } }),
+  thinkEvent(30, 30),
+  blockLine('msg_B', '2026-10-31T08:03:20.500Z', { type: 'text', text: 'y'.repeat(20) }),
+].join('\n');
+
+test('parseStream without a result line: output tokens are estimated from text, tool inputs and thinking events (never the message_start 3)', () => {
+  const r = parseStream(realShaped);
+  // msg_A: (40 + 16) / 4 = 14; msg_B: 20 / 4 = 5; thinking: 50 + 151 + 30 = 231 (the sum of the deltas, not the cumulative values)
+  assert.equal(r.tokens.output, 14 + 5 + 231);
+  assert.equal(r.outputEstimated, true);
+  assert.equal(r.tokens.input, 8);
+  assert.equal(r.tokens.cacheRead, 4000);
+  assert.equal(r.tokens.cacheWrite, 200);
+  assert.equal(r.turns, 2);
+  assert.equal(r.subtype, null);
+});
+
+test('parseStream: a message whose real usage is larger than the estimate keeps the usage; the result line usage replaces the estimate', () => {
+  const big = [JSON.stringify({ type: 'assistant', message: { id: 'm', usage: { output_tokens: 500 }, content: [{ type: 'text', text: 'hi' }] } })].join('\n');
+  assert.equal(parseStream(big).tokens.output, 500);
+  const withResult = `${realShaped}\n${JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 5000, usage: { output_tokens: 999 } })}`;
+  const r = parseStream(withResult);
+  assert.equal(r.tokens.output, 999);
+  assert.equal(r.outputEstimated, false);
+  assert.equal(r.tokens.cacheRead, 4000, 'the other counts still come from the messages');
+  assert.equal(r.ms, 5000);
+  assert.equal(r.msFromStream, false, 'the result line wins over the timestamps');
+  const noUsage = `${realShaped}\n${JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 5000 })}`;
+  assert.equal(parseStream(noUsage).outputEstimated, true, 'a result line without usage leaves the estimate in place');
+});
+
+test('parseStream without a result line: time is the last minus the first timestamp in the stream', () => {
+  const r = parseStream(realShaped);
+  assert.equal(r.ms, 200500);
+  assert.equal(r.msFromStream, true);
+  assert.equal(parseStream(blockLine('m', '2026-10-31T08:00:00.000Z', { type: 'text', text: 'a' })).ms, null, 'one timestamp is no duration');
+  assert.equal(parseStream(tsLine('user', 'not a date', {})).ms, null);
+});
+
+test('createTokenCounter: counts the estimated output and thinking like parseStream, so the cap and the report agree', () => {
+  const c = createTokenCounter();
+  c.feed(realShaped.slice(0, 200));
+  const total = c.feed(`${realShaped.slice(200)}\n`);
+  const parsed = parseStream(realShaped);
+  assert.equal(total, weightedTokens(parsed));
+  assert.equal(c.raw(), rawTokens(parsed));
+  assert.equal(c.weighted(), 8 + 250 + 200 + 400);
+  assert.equal(c.raw(), 8 + 250 + 200 + 4000);
+});
+
+test('formatReport: estimated output and stream-timestamp time are labelled; real ones are not', () => {
+  const est = parseStream(realShaped);
+  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: { ...est, exit: null }, without: fullArm() }, maxTokens: 1500000 });
+  assert.ok(md.includes('| output tokens | 250 (estimated) | 150 |'), md);
+  assert.ok(md.includes('| time | 200.5 s (from stream timestamps) | 61.0 s |'), md);
+  assert.ok(md.includes('| tokens (weighted: cache reads at 0.1) | 858 | 918 |'), md);
+  assert.ok(md.includes('| tokens (raw) | 4458 | 4968 |'), md);
+  assert.ok(md.includes('weighted tokens (input + output + cache creation + 0.1 x cache read, rounded down)'), 'the note explains the cap');
+  assert.ok(md.includes('Output is estimated while the arm runs'), 'the note says output is estimated');
+});
+
+test('weightedTokens / rawTokens: integer arithmetic, cache reads at a tenth, rounded down', () => {
+  const t = (o) => ({ tokens: { output: 0, cacheRead: 0, cacheWrite: 0, input: 0, ...o } });
+  assert.equal(weightedTokens(t({ cacheRead: 9 })), 0);
+  assert.equal(weightedTokens(t({ cacheRead: 19, input: 1 })), 2);
+  assert.equal(weightedTokens(t({ cacheRead: 1_958_770, input: 10, output: 400 })), 195_877 + 410);
+  assert.equal(rawTokens(t({ cacheRead: 5, output: 1 })), 6);
+  assert.equal(weightedTokens(undefined), 0);
+});
+
+test('README and CHANGELOG explain the weighting and the version is 0.2.2 everywhere', () => {
+  const root = path.join(here, '..');
+  const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
+  assert.match(readme, /Version 0\.2\.2:/);
+  assert.ok(readme.includes('cache reads count 0.1'), 'README explains the weighting');
+  assert.ok(readme.includes('1,500,000'));
+  const changelog = readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+  assert.match(changelog, /^## 0\.2\.2 /m);
+  assert.equal(JSON.parse(readFileSync(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8')).version, '0.2.2');
 });

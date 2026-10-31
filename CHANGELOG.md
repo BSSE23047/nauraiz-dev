@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 — 2026-10-31
+
+- measure: the default allowed tools now include `Skill`, `Agent`, `AskUserQuestion` and `TodoWrite`, for both arms. Under `claude -p` a tool that is not allowed is denied, so the `with` arm's call to the plugin's own skill was refused and the plugin could not run its process.
+- measure: `--max-tokens` counts weighted tokens: input + output + cache creation + 0.1 x cache read, rounded down. Cache reads were about 98% of the counted tokens and are weighted at about a tenth by plan and API limits, so the raw cap stopped runs far too early. The report header says "Token cap: N weighted tokens per arm (cache reads count 0.1)" and has `tokens (weighted: cache reads at 0.1)` and `tokens (raw)` rows. The suggested cap is now 1,500,000 weighted tokens per arm. This changes what an existing `--max-tokens` value means: the same number now allows far more raw tokens.
+- measure: output tokens without a result line (a capped or killed arm) are estimated: characters of the text blocks plus the JSON length of the tool inputs, divided by 4 per message, plus the sum of the `thinking_tokens` deltas; the real stream only carries the message_start value there. The report row says "(estimated)". With a result line its usage is used.
+- measure: time without a result line is the last minus the first `timestamp` in the stream, shown as "(from stream timestamps)".
+
 ## 0.2.1 — 2026-10-31
 
 - measure: `--max-tokens` per-arm token cap for subscription plans; `--budget` is optional when it is set (at least one cap is required; both can be given). The harness counts input, output, cache creation and cache read tokens from the stream and kills the arm at the cap; the report gets a `stopped at token cap` row and the cap in the header.

@@ -483,8 +483,8 @@ test('runMeasure: an arm whose streamed usage reaches --max-tokens is killed, ma
   assert.ok(r.md.includes('| stopped at token cap | yes | yes |'), r.md);
   assert.ok(r.md.includes('| result | FAILED: stopped at the token cap | FAILED: stopped at the token cap |'), r.md);
   assert.ok(r.md.includes('| gate | pass | pass |'));
-  assert.match(r.md, /Token cap: 100 per arm\./);
-  assert.equal(r.logs.find((l) => l.startsWith('Token cap')), 'Token cap: 100 per arm (200 total)');
+  assert.match(r.md, /Token cap: 100 weighted tokens per arm \(cache reads count 0\.1\)\./);
+  assert.equal(r.logs.find((l) => l.startsWith('Token cap')), 'Token cap: 100 weighted tokens per arm (200 total; cache reads count 0.1)');
   assert.ok(!r.logs.some((l) => l.startsWith('Approximate total cap')), 'no USD line without a budget');
   assert.equal(r.res.totalCapTokens, 200);
   assert.equal(r.withStream, chunks.slice(0, 3).join(''), 'the partial stream is kept and cut right after the line that reached the cap');
@@ -518,8 +518,8 @@ test('runMeasure: --max-tokens only passes no --max-budget-usd; --budget only st
   const both = await runWith({ budgetUsd: 3, maxTokens: 500 });
   for (const c of both.calls) assert.equal(c.args[c.args.indexOf('--max-budget-usd') + 1], '3');
   assert.match(both.logs[0], /^Approximate total cap: 6 USD/);
-  assert.ok(both.logs.includes('Token cap: 500 per arm (1000 total)'));
-  assert.match(both.md, /Token cap: 500 per arm\. Budget cap: 3 USD per arm\./);
+  assert.ok(both.logs.includes('Token cap: 500 weighted tokens per arm (1000 total; cache reads count 0.1)'));
+  assert.match(both.md, /Token cap: 500 weighted tokens per arm \(cache reads count 0\.1\)\. Budget cap: 3 USD per arm\./);
 });
 
 test('runMeasure: refuses with neither cap, or a bad --max-tokens, before cloning anything', async () => {
@@ -722,4 +722,40 @@ test('POSIX kill path: arms spawn detached; the token cap and the timeout signal
 test('win32 kill path: arms are not spawned detached', async () => {
   const r = await runWith({ budgetUsd: 1, platform: 'win32' });
   assert.ok(r.calls.every((c) => c.opts.detached === false));
+});
+
+const cacheLine = (id, cacheRead, extra = {}) => JSON.stringify({ type: 'assistant', timestamp: extra.ts, message: { id, usage: { input_tokens: 0, output_tokens: 3, cache_read_input_tokens: cacheRead }, content: extra.content ?? [] } }) + '\n';
+
+test('runMeasure: the cap counts weighted tokens; cache reads that would trip a raw cap do not, and the arm is killed once the weighted count reaches it', async () => {
+  // each message: 3 output + 0.1 x 5,000 cache reads = 503 weighted (5,003 raw); the cap is 1,000
+  const chunks = [cacheLine('m1', 5000), cacheLine('m2', 5000), cacheLine('m3', 5000)];
+  const r = await runWith({ maxTokens: 1000 }, { chunks });
+  assert.deepEqual(r.calls.map((c) => c.killed), [1, 1]);
+  assert.equal(r.withStream, chunks.slice(0, 2).join(''), 'm1 = 503 weighted (under 1,000); m2 = 1,006 stops it');
+  assert.match(r.logs.find((l) => /token cap reached/.test(l)), /1006 of 1000 weighted tokens/);
+  const under = await runWith({ maxTokens: 1000 }, { chunks: [cacheLine('m1', 5000)] });
+  assert.deepEqual(under.calls.map((c) => c.killed), [0, 0], '5,003 raw tokens against a 1,000 cap: not stopped, because the weighted count is 503');
+});
+
+test('runMeasure: a stopped arm with no result line gets estimated output and the time from the stream timestamps in its report', async () => {
+  const text = (n) => [{ type: 'text', text: 'z'.repeat(n) }];
+  const chunks = [
+    cacheLine('m1', 1000, { ts: '2026-10-31T08:00:00.000Z', content: text(400) }),
+    cacheLine('m2', 100_000, { ts: '2026-10-31T08:01:30.000Z', content: text(40) }),
+    cacheLine('m3', 100_000, { ts: '2026-10-31T08:09:00.000Z' }),
+  ];
+  const r = await runWith({ maxTokens: 5000 }, { chunks });
+  // stopped at m2: 100 + 10 estimated output, 101,000 cache reads
+  assert.ok(r.md.includes('| output tokens | 110 (estimated) | 110 (estimated) |'), r.md);
+  assert.ok(r.md.includes('| time | 90.0 s (from stream timestamps) | 90.0 s (from stream timestamps) |'), r.md);
+  assert.ok(r.md.includes('| tokens (weighted: cache reads at 0.1) | 10210 | 10210 |'), r.md);
+  assert.ok(r.md.includes('| tokens (raw) | 101110 | 101110 |'), r.md);
+  assert.ok(r.md.includes('| stopped at token cap | yes | yes |'));
+});
+
+test('runMeasure: both arms get Skill, Agent, AskUserQuestion and TodoWrite in the same allowed-tools list', async () => {
+  const r = await runWith({ budgetUsd: 1 });
+  const lists = r.calls.map((c) => c.args[c.args.indexOf('--allowedTools') + 1]);
+  assert.equal(lists[0], lists[1]);
+  for (const t of ['Skill', 'Agent', 'AskUserQuestion', 'TodoWrite']) assert.ok(lists[0].split(' ').includes(t), t);
 });
