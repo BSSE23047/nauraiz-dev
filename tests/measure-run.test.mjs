@@ -147,7 +147,7 @@ test('runMeasure: fresh detached clones, prompt on stdin, settings file, push di
     assert.ok(md.includes('| files touched | plan.md, v1.txt | v1.txt |'), md);
     assert.ok(md.includes('| approvals recorded | 1 | 0 |'));
     assert.ok(md.includes('| gate | pass | pass |'));
-    assert.ok(md.includes('| output tokens | 150 | 150 |'));
+    assert.ok(md.includes('| output tokens | 175 | 175 |'));
     assert.ok(md.includes('git remote set-url --push origin DISABLED-by-nauraiz-measure'));
     assert.ok(!md.includes(root) && !md.includes('src/a.js'), 'no local paths, no raw tool paths');
     assert.match(md, /n=1 per arm; not a benchmark\./);
@@ -748,8 +748,8 @@ test('runMeasure: a stopped arm with no result line gets estimated output and th
   // stopped at m2: 100 + 10 estimated output, 101,000 cache reads
   assert.ok(r.md.includes('| output tokens | 110 (estimated) | 110 (estimated) |'), r.md);
   assert.ok(r.md.includes('| time | 90.0 s (from stream timestamps) | 90.0 s (from stream timestamps) |'), r.md);
-  assert.ok(r.md.includes('| tokens (weighted: cache reads at 0.1) | 10210 | 10210 |'), r.md);
-  assert.ok(r.md.includes('| tokens (raw) | 101110 | 101110 |'), r.md);
+  assert.ok(r.md.includes('| tokens (weighted: cache reads at 0.1) | 10210 (includes estimated output) | 10210 (includes estimated output) |'), r.md);
+  assert.ok(r.md.includes('| tokens (raw) | 101110 (includes estimated output) | 101110 (includes estimated output) |'), r.md);
   assert.ok(r.md.includes('| stopped at token cap | yes | yes |'));
 });
 

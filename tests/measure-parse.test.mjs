@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseStream, buildArgs, formatReport, settingsJson, createTokenCounter, tokenCapNotEnforced, totalTokens, rawTokens, weightedTokens, DEFAULT_ALLOWED_TOOLS } from '../scripts/measure/parse.mjs';
@@ -12,7 +12,7 @@ test('parseStream: totals, usage deduped by message id, tolerant of bad and unkn
   const r = parseStream(stream);
   assert.equal(r.ms, 61000);
   assert.equal(r.costUsd, 0.4321);
-  assert.deepEqual(r.tokens, { output: 150, cacheRead: 4500, cacheWrite: 300, input: 18 });
+  assert.deepEqual(r.tokens, { output: 175, cacheRead: 4500, cacheWrite: 300, input: 18 });
   assert.deepEqual(r.skills, ['nauraiz-dev:start-task', 'nauraiz-dev:grill']);
   assert.equal(r.questions, 1);
   assert.deepEqual(r.edits, ['src/a.js', 'src/b.js', 'nb/n.ipynb']);
@@ -21,6 +21,9 @@ test('parseStream: totals, usage deduped by message id, tolerant of bad and unkn
   assert.equal(r.isError, false);
   assert.equal(r.pluginCopies, 1);
   assert.equal(r.outputEstimated, false, 'the result line carries real usage');
+  const noResult = parseStream(stream.split('\n').filter((l) => !l.includes('"type":"result"')).join('\n'));
+  assert.equal(noResult.tokens.output, 170, 'the estimate (the larger of chars/4 and the message usage, per message)');
+  assert.notEqual(r.tokens.output, noResult.tokens.output, 'the result line (175) wins over the per-message figures (150 usage, 170 estimate)');
   assert.equal(r.msFromStream, false);
 });
 
@@ -84,9 +87,9 @@ test('formatReport: a table of every field per arm, the commands, safety, gate r
   }
   assert.ok(md.includes('| result | success | success |'), "| result | success | success |");
   assert.ok(md.includes('| time | 61.0 s | 90.5 s |'), "| time | 61.0 s | 90.5 s |");
-  assert.ok(md.includes('| output tokens | 150 | 150 |'), "| output tokens | 150 | 150 |");
-  assert.ok(md.includes('| tokens (weighted: cache reads at 0.1) | 918 | 918 |'), md);
-  assert.ok(md.includes('| tokens (raw) | 4968 | 4968 |'), md);
+  assert.ok(md.includes('| output tokens | 175 | 175 |'), "| output tokens | 175 | 175 |");
+  assert.ok(md.includes('| tokens (weighted: cache reads at 0.1) | 943 | 943 |'), md);
+  assert.ok(md.includes('| tokens (raw) | 4993 | 4993 |'), md);
   assert.ok(md.includes('| skills invoked | nauraiz-dev:start-task, nauraiz-dev:grill | none |'), "| skills invoked | nauraiz-dev:start-task, nauraiz-dev:grill | none |");
   assert.ok(md.includes('| nauraiz-dev copies loaded | 1 | 0 |'), "| nauraiz-dev copies loaded | 1 | 0 |");
   assert.ok(md.includes('| files touched | src/a.js, src/b.js | none |'), "| files touched | src/a.js, src/b.js | none |");
@@ -190,8 +193,8 @@ test('buildArgs: --max-budget-usd is left out when there is no budget (token cap
 test('formatReport: the token cap in the header, a stopped-at-token-cap row, no --max-budget-usd without a budget', () => {
   const capped = fullArm({ stoppedAtTokenCap: true, subtype: null });
   const ok = fullArm();
-  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: capped, without: ok }, maxTokens: 2000000, budgetUsd: null });
-  assert.match(md, /^Date: d\. Model: m\. Token cap: 2000000 weighted tokens per arm \(cache reads count 0\.1\)\.$/m);
+  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: capped, without: ok }, maxTokens: 1500000, budgetUsd: null });
+  assert.match(md, /^Date: d\. Model: m\. Token cap: 1500000 weighted tokens per arm \(cache reads count 0\.1\)\.$/m);
   assert.ok(md.includes('| stopped at token cap | yes | no |'), md);
   assert.ok(md.includes('| result | FAILED: stopped at the token cap | success |'), md);
   assert.ok(!md.includes('--max-budget-usd'));
@@ -220,14 +223,20 @@ test('formatReport: no --max-budget-usd in the commands without a budget (undefi
 });
 
 test('tokenCapNotEnforced / formatReport: a finished stream that counts the cap without a stop gets a WARNING banner', () => {
-  const arm = fullArm(); // raw 18 + 150 + 4500 + 300 = 4968; weighted 18 + 150 + 300 + 450 = 918
-  assert.equal(totalTokens(arm), 4968);
-  assert.equal(weightedTokens(arm), 918);
-  assert.equal(tokenCapNotEnforced(arm, 918), true);
-  assert.equal(tokenCapNotEnforced(arm, 919), false, 'the cap is checked against weighted tokens, not raw');
+  const arm = fullArm(); // raw 18 + 175 + 4500 + 300 = 4993; weighted 18 + 175 + 300 + 450 = 943
+  assert.equal(totalTokens(arm), 4993);
+  assert.equal(weightedTokens(arm), 943);
+  assert.equal(tokenCapNotEnforced(arm, 943), true);
+  assert.equal(tokenCapNotEnforced(arm, 944), false, 'the cap is checked against weighted tokens, not raw (4993)');
+  const est = fullArm({ ...parseStream(realShaped), files: [], approvals: 0, exit: null }); // estimated: weighted 858
+  assert.equal(est.outputEstimated, true);
+  assert.equal(weightedTokens(est), 858);
+  assert.equal(tokenCapNotEnforced(est, 858), true, 'an estimated arm that reached the cap unstopped is flagged too');
+  assert.equal(tokenCapNotEnforced(est, 859), false);
+  assert.equal(tokenCapNotEnforced({ ...est, stoppedAtTokenCap: true }, 858), false);
   assert.equal(tokenCapNotEnforced({ ...arm, stoppedAtTokenCap: true }, 100), false, 'a stopped arm is not a surprise');
   assert.equal(tokenCapNotEnforced(arm, undefined), false);
-  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: arm, without: arm }, maxTokens: 100, warnings: ['the with arm: token cap reached but the arm was not stopped (918 weighted tokens counted, cap 100)'] });
+  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: arm, without: arm }, maxTokens: 100, warnings: ['the with arm: token cap reached but the arm was not stopped (943 weighted tokens counted, cap 100)'] });
   assert.ok(md.startsWith('**WARNING: the with arm: token cap reached but the arm was not stopped'), md.slice(0, 120));
 });
 
@@ -298,6 +307,36 @@ test('parseStream without a result line: time is the last minus the first timest
   assert.equal(parseStream(tsLine('user', 'not a date', {})).ms, null);
 });
 
+test('parseStream: timestamps may arrive out of order (min and max), as epoch milliseconds or seconds, mixed with ISO strings', () => {
+  const lines = [tsLine('user', '2026-10-31T08:00:10.000Z', {}), tsLine('user', '2026-10-31T08:00:00.000Z', {}), tsLine('user', '2026-10-31T08:00:05.000Z', {})];
+  assert.equal(parseStream(lines.join('\n')).ms, 10000);
+  const base = Date.parse('2026-10-31T08:00:00.000Z');
+  const ms = [tsLine('user', base + 7000, {}), tsLine('user', base, {})].join('\n');
+  assert.equal(parseStream(ms).ms, 7000, 'epoch milliseconds');
+  const secs = [tsLine('user', base / 1000 + 9, {}), tsLine('user', base / 1000, {})].join('\n');
+  assert.equal(parseStream(secs).ms, 9000, 'epoch seconds');
+  const mixed = [tsLine('user', '2026-10-31T08:00:00.000Z', {}), tsLine('user', base + 4000, {}), tsLine('user', null, {}), tsLine('user', NaN, {})].join('\n');
+  assert.equal(parseStream(mixed).ms, 4000, 'null and NaN timestamps are ignored');
+  assert.equal(parseStream([tsLine('user', base, {}), tsLine('user', base, {})].join('\n')).ms, null, 'equal timestamps are no duration');
+});
+
+test('parseStream: a stream of thinking events only still estimates output from the deltas (no messages, no turns, no time)', () => {
+  const r = parseStream([thinkEvent(50, 50), thinkEvent(201, 151)].join('\n'));
+  assert.deepEqual(r.tokens, { output: 201, cacheRead: 0, cacheWrite: 0, input: 0 });
+  assert.equal(r.outputEstimated, true);
+  assert.equal(r.turns, 0);
+  assert.equal(r.ms, null);
+  assert.equal(weightedTokens(r), 201);
+});
+
+test('parseStream: a duplicated block (same tool_use id, same text) is counted once; different text of the same length is not merged', () => {
+  const one = (id, block) => JSON.stringify({ type: 'assistant', message: { id, usage: { output_tokens: 1 }, content: [block] } });
+  const dup = [one('m', { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'a'.repeat(40) } }), one('m', { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'a'.repeat(40) } })];
+  assert.equal(parseStream(dup.join('\n')).tokens.output, Math.ceil(('{"command":"' + 'a'.repeat(40) + '"}').length / 4));
+  const same = [one('m', { type: 'text', text: 'a'.repeat(40) }), one('m', { type: 'text', text: 'b'.repeat(40) })];
+  assert.equal(parseStream(same.join('\n')).tokens.output, 20, 'two different 40-character texts are 80 characters');
+});
+
 test('createTokenCounter: counts the estimated output and thinking like parseStream, so the cap and the report agree', () => {
   const c = createTokenCounter();
   c.feed(realShaped.slice(0, 200));
@@ -312,10 +351,11 @@ test('createTokenCounter: counts the estimated output and thinking like parseStr
 test('formatReport: estimated output and stream-timestamp time are labelled; real ones are not', () => {
   const est = parseStream(realShaped);
   const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: { ...est, exit: null }, without: fullArm() }, maxTokens: 1500000 });
-  assert.ok(md.includes('| output tokens | 250 (estimated) | 150 |'), md);
+  assert.ok(md.includes('| output tokens | 250 (estimated) | 175 |'), md);
   assert.ok(md.includes('| time | 200.5 s (from stream timestamps) | 61.0 s |'), md);
-  assert.ok(md.includes('| tokens (weighted: cache reads at 0.1) | 858 | 918 |'), md);
-  assert.ok(md.includes('| tokens (raw) | 4458 | 4968 |'), md);
+  assert.ok(md.includes('| tokens (weighted: cache reads at 0.1) | 858 (includes estimated output) | 943 |'), md);
+  assert.ok(md.includes('| tokens (raw) | 4458 (includes estimated output) | 4993 |'), md);
+  assert.ok(!md.includes('| 943 (includes') && !md.includes('| 4993 (includes'), 'an arm with a real result line carries no label');
   assert.ok(md.includes('weighted tokens (input + output + cache creation + 0.1 x cache read, rounded down)'), 'the note explains the cap');
   assert.ok(md.includes('Output is estimated while the arm runs'), 'the note says output is estimated');
 });
@@ -329,7 +369,7 @@ test('weightedTokens / rawTokens: integer arithmetic, cache reads at a tenth, ro
   assert.equal(weightedTokens(undefined), 0);
 });
 
-test('README and CHANGELOG explain the weighting and the version is 0.2.2 everywhere', () => {
+test('README and CHANGELOG explain the weighting; every version carrier says 0.2.2; no old 2,000,000 default is left', () => {
   const root = path.join(here, '..');
   const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
   assert.match(readme, /Version 0\.2\.2:/);
@@ -337,5 +377,16 @@ test('README and CHANGELOG explain the weighting and the version is 0.2.2 everyw
   assert.ok(readme.includes('1,500,000'));
   const changelog = readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, /^## 0\.2\.2 /m);
-  assert.equal(JSON.parse(readFileSync(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8')).version, '0.2.2');
+  assert.ok(changelog.includes('keeps the larger of'), 'the changelog says how the estimate is chosen');
+  const plugin = JSON.parse(readFileSync(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8'));
+  assert.equal(plugin.version, '0.2.2');
+  // every JSON manifest that carries a version (package.json and marketplace.json carry none today; if one gets one, it must match)
+  const manifest = (rel) => JSON.parse(readFileSync(path.join(root, rel), 'utf8'));
+  const market = manifest('.claude-plugin/marketplace.json');
+  for (const v of [manifest('package.json').version, market.version, market.metadata?.version, ...(market.plugins ?? []).map((p) => p.version)]) {
+    if (v !== undefined) assert.equal(v, '0.2.2');
+  }
+  // the old raw-token default must not survive anywhere a user reads about the cap
+  const docs = [readme, ...readdirSync(path.join(root, 'skills')).map((d) => path.join(root, 'skills', d, 'SKILL.md')).filter(existsSync).map((p) => readFileSync(p, 'utf8'))];
+  for (const text of docs) assert.ok(!text.includes('2,000,000'), 'no 2,000,000 default in README or any SKILL.md');
 });

@@ -35,6 +35,13 @@ export const weightedTokens = (a) => Math.floor((10 * (num(a?.tokens?.input) + n
  * plus the sum of the `estimated_tokens_delta` of the `system:thinking_tokens` events. A result line's own
  * usage replaces the estimate when it is present (see `tokens`).
  */
+// FNV-1a, 32 bits: enough to tell two blocks of one message apart without keeping their text
+function shortHash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(16);
+}
+
 function createTally() {
   const usageById = new Map();
   const charsById = new Map();
@@ -53,7 +60,8 @@ function createTally() {
         if (block.type === 'text' && typeof block.text === 'string') chars = block.text.length;
         else if (block.type === 'tool_use') chars = JSON.stringify(block.input ?? {}).length;
         else continue;
-        const key = `${msg.id}|${JSON.stringify(block)}`;
+        // a tool_use is one block per id; a text block is told apart by its length and a short hash
+        const key = block.type === 'tool_use' && typeof block.id === 'string' ? `${msg.id}|tu|${block.id}` : `${msg.id}|${block.type}|${chars}|${shortHash(block.type === 'text' ? block.text : JSON.stringify(block.input ?? {}))}`;
         if (seenBlocks.has(key)) continue;
         seenBlocks.add(key);
         charsById.set(msg.id, (charsById.get(msg.id) ?? 0) + chars);
@@ -101,7 +109,8 @@ export function createTokenCounter() {
     if (obj && typeof obj === 'object') tallyObject(tally, obj);
     return true;
   };
-  const snapshot = () => ({ tokens: tally.tokens().tokens });
+  // recomputed once per feed (the only place the tally changes), not on every raw()/weighted() call
+  let snap = { tokens: tally.tokens().tokens };
   return {
     feed(chunk) {
       pending += String(chunk ?? '');
@@ -109,13 +118,17 @@ export function createTokenCounter() {
       pending = lines.pop();
       for (const l of lines) take(l);
       if (pending && take(pending)) pending = '';
-      return weightedTokens(snapshot());
+      snap = { tokens: tally.tokens().tokens };
+      return weightedTokens(snap);
     },
-    raw: () => rawTokens(snapshot()),
-    weighted: () => weightedTokens(snapshot()),
-    total: () => weightedTokens(snapshot()),
+    raw: () => rawTokens(snap),
+    weighted: () => weightedTokens(snap),
+    total: () => weightedTokens(snap),
   };
 }
+
+/** A stream timestamp as epoch milliseconds: an ISO string, or a number (epoch seconds below 1e11, else milliseconds). NaN when unusable. */
+const toEpochMs = (v) => (typeof v === 'number' ? (Math.abs(v) < 1e11 ? v * 1000 : v) : Date.parse(v));
 
 /**
  * Parse the text of a stream-json run. Invalid JSON lines and unknown line types are skipped.
@@ -145,8 +158,8 @@ export function parseStream(text) {
     try { obj = JSON.parse(line); } catch { continue; }
     if (!obj || typeof obj !== 'object') continue;
 
-    if (typeof obj.timestamp === 'string') {
-      const t = Date.parse(obj.timestamp);
+    if (typeof obj.timestamp === 'string' || typeof obj.timestamp === 'number') {
+      const t = toEpochMs(obj.timestamp);
       if (Number.isFinite(t)) { firstTs = Math.min(firstTs, t); lastTs = Math.max(lastTs, t); }
     }
     tallyObject(tally, obj);
@@ -234,6 +247,7 @@ const capsText = (maxTokens, budgetUsd) => {
   if (maxTokens && typeof budgetUsd === 'number') parts.push(` Budget cap: ${budgetUsd} USD per arm.`);
   return parts.join('');
 };
+const INCLUDES_ESTIMATE = ' (includes estimated output)';
 const orNa = (v, f) => (v === null || v === undefined ? 'n/a' : f(v));
 
 function gateCell(g) {
@@ -266,8 +280,8 @@ export function formatReport({ date, task, prompt, model, arms, gate = {}, budge
     ['cache read tokens', (a) => a.tokens.cacheRead],
     ['cache write tokens', (a) => a.tokens.cacheWrite],
     ['input tokens', (a) => a.tokens.input],
-    ['tokens (weighted: cache reads at 0.1)', (a) => weightedTokens(a)],
-    ['tokens (raw)', (a) => rawTokens(a)],
+    ['tokens (weighted: cache reads at 0.1)', (a) => `${weightedTokens(a)}${a.outputEstimated ? INCLUDES_ESTIMATE : ''}`],
+    ['tokens (raw)', (a) => `${rawTokens(a)}${a.outputEstimated ? INCLUDES_ESTIMATE : ''}`],
     ['turns', (a) => a.turns],
     ['stopped at token cap', (a) => (a.stoppedAtTokenCap ? 'yes' : 'no')],
     ['questions (AskUserQuestion calls only)', (a) => a.questions],
