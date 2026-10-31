@@ -6,8 +6,8 @@ Skill-listing cost: about 937 tokens always-on for all 13 skills and both agents
 
 Breaking:
 
-- Cost line wording changed: `tokens this session (main thread): output …` is now `tokens this session: main out …`, with subagent totals and elapsed minutes appended.
-- Session-start line 2 changed: the triage line is replaced by the `start-task` line.
+- Cost line wording changed: `tokens this session (main thread): output …` is now `tokens this session: main out …`, with subagent totals and the wall time appended (`· 24 min wall`, left out above 1440 minutes).
+- Session-start line 2 changed: the triage line is replaced by the `start-task` line, which also names `/nauraiz-dev:ship` for push and PR.
 
 New skills (10, 13 in total):
 
@@ -31,13 +31,16 @@ Hooks and scripts:
 - `init` detects `check`/`verify`/`typecheck`/`e2e` scripts and Makefile targets, proposes the one-shot form when `test` runs a watcher, and fills `sharedPaths` from the project's own shared-path lists.
 - New config keys: `sharedPaths` and `models.explore`.
 - `PreToolUse` asks (never denies) before an edit to a plan records an `*_approval` that does not start with `pending`; compares before and after text, so an Edit that adds an approval line is caught.
-- `scripts/task/collision.mjs`: assignees, open PRs that reference the issue, remote branch authors; verdict `free`, `ours`, `taken` or `unknown` (`gh` missing or offline is `unknown`, never `free`).
-- `scripts/gate/run.mjs`: runs gate commands in order, substitutes `${plan}` and `${base}`, `${base}` resolves to `origin/<base>` when the local branch is behind it.
-- `SessionStart`: warns when superpowers is missing and when `mockupRoot` is outside the repo; local mode adds the gate names.
-- `Stop`: counts a gate-runner call as a gate run; cost line adds subagent tokens and elapsed minutes.
+- `scripts/task/collision.mjs`: assignees, open PRs that reference the issue, remote branch authors; verdict `free`, `ours`, `taken` or `unknown` (`gh` missing or offline is `unknown`, never `free`; so is a failed `git ls-remote` when `gh` found no owner).
+- `scripts/gate/run.mjs`: runs gate commands in order, substitutes `${plan}` and `${base}`, `${base}` resolves to `origin/<base>` when the local branch is behind it. Exit codes: 0 pass, 1 a command failed, 2 no gate, 3 the runner itself failed. A config error is printed to stderr whatever the outcome.
+- `SessionStart`: warns when superpowers is missing (reading `CLAUDE_CONFIG_DIR` when set) and when `mockupRoot` is outside the repo; local mode adds the gate names and the runner command with the plugin path spelled out.
+- `Stop`: counts a gate-runner call as a gate run; cost line adds subagent tokens (cached per transcript file; `subagents partial` past 64 MB of new reads in one stop) and wall time.
+- `PreToolUse`: an unreadable local-only config keeps the `.env*` deny, as an unreadable project config does. Edits under the git directory are bookkeeping (no scope ask, not counted as work).
+- `init` no longer offers scripts whose name contains `watch` as gate commands; `init --local` over a tracked config writes only the keys that differ from it.
+- `measure`: the `with` clone gets a guided local config even without `--local-config`; an arm whose `claude` exits non-zero with no result line fails the run; `gh api user` is no longer in the default allowed tools.
 - `setup` recommends the user-scope install.
 
-Evals: 11 of 13 cases passed on the release run; see evals/results/2026-10-31-summary.md.
+Evals: 11 of 13 cases passed on the release run; `ship-not-model-invoked` was re-run once after the session-start change (reply fixed, still 0.5 on an attempted Skill call); two cases added and not yet run (`grill-small-negative`, `start-task-taken-stops`). See evals/results/2026-10-31-summary.md.
 
 Docs: README rewritten for 0.2.0; design notes list the 0.2.0 decisions. No measured numbers are published yet.
 
