@@ -1,6 +1,6 @@
 # nauraiz-dev
 
-A Claude Code plugin for the way work gets done: it checks who owns an issue, asks the owner what only the owner can answer before building, runs a gate that reads real exit codes, and keeps memory that survives the session. It layers on [superpowers](https://github.com/obra/superpowers). Version 0.2.2: five hooks, thirteen skills, two agents.
+A Claude Code plugin for the way work gets done: it checks who owns an issue, asks the owner what only the owner can answer before building, runs a gate that reads real exit codes, and keeps memory that survives the session. It layers on [superpowers](https://github.com/obra/superpowers). Version 0.2.3: five hooks, thirteen skills, two agents.
 
 ## Install
 
@@ -40,7 +40,7 @@ Thirteen. Skills that are not marked "you only" can also fire from a request or 
 
 | Skill | Use it to | Invoked by |
 | --- | --- | --- |
-| `/nauraiz-dev:start-task` | Start work on an issue or feature: check who owns it, check the base branch, size the task, ask what matters, route to the right process, plan, build, gate, report. | you, or Claude on the first substantive request |
+| `/nauraiz-dev:start-task` | Start work on an issue or feature: check who owns it, check the base branch, size the task, ask what matters, route to the right process, plan, build, gate, report. Its pre-flight (issue, collision check, base check) is one call to `scripts/task/preflight.mjs`. | you, or Claude on the first substantive request |
 | `/nauraiz-dev:grill` | Ask the few questions that change what gets built: one round of at most three, each with a recommendation. | Claude, from `start-task`, or you |
 | `/nauraiz-dev:kickoff-prompt` | Turn an issue into a prompt for a fresh session: guard block, branch, files, decisions, gate, stops, model, budget. | you, or Claude when asked |
 | `/nauraiz-dev:gate` | Run the project's gate and report the real exit codes and last lines of output. | you, or Claude before a report or commit |
@@ -110,7 +110,7 @@ Project settings live in `.claude/nauraiz-dev.json`, committed with the repo and
 | `mockupRoot` | Local folder of design mockups. Set it in `.local.json`; it is shown at session start. | unset |
 | `pr` | Section headings for pull request descriptions, used when the repo has no recent PR by you to copy the format from. | Summary, Steps ↔ commits, Gate output, Decisions to confirm, Risks, Unverified |
 
-The gate runner (`scripts/gate/run.mjs`, called by the `gate` skill) runs each `gate` command in order through the platform shell, prints a table with exit code and duration plus the last lines of each command, and exits non-zero if any failed. A command that exits 0 but prints a failing summary (`FAIL  1 file(s)`, `Tests  1 failed`, `# fail 1`) is reported red. That check errs toward red: a passing test whose name reads like a failure count (`3 failed uploads`) can flag a command, and the runner's table names the reason. It writes nothing into your repo. Exit codes: 0 all passed, 1 a command failed, 2 no gate configured, 3 the runner itself failed.
+The gate runner (`scripts/gate/run.mjs`, called by the `gate` skill) runs each `gate` command in order through the platform shell, prints a table with exit code and duration plus the last lines of each command, and exits non-zero if any failed. A command that exits 0 but prints a failing summary (`FAIL  1 file(s)`, `Tests  1 failed`, `# fail 1`) is reported red. That check errs toward red: a passing test whose name reads like a failure count (`3 failed uploads`) can flag a command, and the runner's table names the reason. It writes nothing into your repo. Started from a subfolder it walks up to the nearest folder with `.claude/nauraiz-dev.json` or `.claude/nauraiz-dev.local.json` (never past the git top-level), runs the commands there, and names that root on stderr; `--cwd` overrides. Exit codes: 0 all passed, 1 a command failed, 2 no gate configured, 3 the runner itself failed.
 
 ## Numbers
 

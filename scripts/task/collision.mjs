@@ -7,7 +7,7 @@ const TIMEOUT_MS = 30000;
 const BRANCH_IN_BODY = /Branch:\s*`([^`]+)`/;
 
 /** Default runner for `cmd`: never throws, returns { code, stdout, stderr } (code null when it could not run). */
-function spawnRunner(cmd, prefix, cwd) {
+export function spawnRunner(cmd, prefix, cwd) {
   return (args) => {
     const r = spawnSync(cmd, [...prefix, ...args], {
       cwd,
@@ -48,8 +48,10 @@ function unknown(partial, command, why) {
  * Decide whether issue `issue` is already owned by someone else.
  * `gh(args)` / `git(args)` are runners returning { code, stdout, stderr }; the defaults spawn the real CLIs
  * (git with `-C cwd`). Never throws: any gh failure yields verdict "unknown" with a reason.
+ * `issueData` is an already-fetched `gh issue view --json ...assignees,body` object; when present the
+ * issue is not fetched again (preflight shares one call). Absent: the issue is fetched here.
  */
-export async function checkCollision({ issue, branch, cwd = process.cwd(), config, gh, git } = {}) {
+export async function checkCollision({ issue, branch, cwd = process.cwd(), config, gh, git, issueData: given } = {}) {
   const result = {
     me: null,
     assignees: [],
@@ -74,14 +76,16 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
   const me = meRes.stdout.trim();
   result.me = me;
 
-  const issueCmd = ['issue', 'view', String(n), '--json', 'assignees,body'];
-  const issueRes = attempt(runGh, issueCmd);
-  if (!issueRes.ok) return unknown(result, `gh ${issueCmd.slice(0, 3).join(' ')}`, issueRes.why);
-  let issueData;
-  try {
-    issueData = JSON.parse(issueRes.stdout);
-  } catch {
-    return unknown(result, `gh ${issueCmd.slice(0, 3).join(' ')}`, 'unparsable JSON');
+  let issueData = given && typeof given === 'object' ? given : null;
+  if (!issueData) {
+    const issueCmd = ['issue', 'view', String(n), '--json', 'assignees,body'];
+    const issueRes = attempt(runGh, issueCmd);
+    if (!issueRes.ok) return unknown(result, `gh ${issueCmd.slice(0, 3).join(' ')}`, issueRes.why);
+    try {
+      issueData = JSON.parse(issueRes.stdout);
+    } catch {
+      return unknown(result, `gh ${issueCmd.slice(0, 3).join(' ')}`, 'unparsable JSON');
+    }
   }
   result.assignees = (issueData.assignees ?? []).map((a) => a.login).filter(Boolean);
   result.otherAssignees = result.assignees.filter((a) => lower(a) !== lower(me));

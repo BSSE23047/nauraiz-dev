@@ -37,7 +37,9 @@ no shell and works from the diff file; it returns findings by severity.
    Run `git diff origin/<base>...HEAD > "<diff>"`. Empty: say "Nothing to review against
    origin/<base>" and stop.
 3. Dispatch the reviewer on `<diff>`. Meanwhile run
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"` (exit 2: as the `gate` skill says).
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"` once, from any folder in the project
+   (it prints every exit code: never append `echo $?`, pipes or `cd`; re-run only after you
+   changed code). Exit 2: as the `gate` skill says.
 4. Report: the findings ranked by severity, the gate output verbatim, what was not
    checked. End with what to fix before `/nauraiz-dev:ship`, or "No blocking findings".
    Do not fix anything unless the owner asks. Stop.
@@ -60,7 +62,8 @@ no shell and works from the diff file; it returns findings by severity.
    - When `isCrossRepository` is true, before anything runs, warn:
      this runs the fork's code through the gate; ask, and stop until the owner answers.
    - If the gate needs dependencies, install them in `<wt>` (`npm ci`, `flutter pub get`).
-   - `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" --cwd "<wt>"`; add
+   - `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" --cwd "<wt>"` (once; no `echo $?`,
+     pipes or `cd`); add
      `--plan "<wt>/<plan>"` if the PR carries a plan for `headRefName`.
    - Then, only if `git worktree add` succeeded, `git worktree remove --force "<wt>"` with
      the exact `<wt>` this run created, never another path, even when a step failed.

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { isMain } from '../lib/main.mjs';
 import { loadConfig } from '../lib/config.mjs';
 import { resolveBase } from '../lib/base.mjs';
 import { currentBranch } from '../lib/git.mjs';
 import { findPlanForBranch } from '../lib/plan.mjs';
+import { realPath } from '../lib/paths.mjs';
 
 const TAIL_LINES = 15;
 const NO_PLAN = 'no plan for this branch (pass --plan)';
@@ -106,8 +108,43 @@ export function formatGate(results) {
   return lines.join('\n') + '\n';
 }
 
+/** The git top-level of `cwd`, or null when it is not in a repo or git cannot run. */
+function gitTopLevel(cwd) {
+  const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  const top = r.error || r.status !== 0 ? '' : String(r.stdout ?? '').trim();
+  return top || null;
+}
+
+const sameDir = (a, b) => {
+  const x = realPath(a) ?? path.resolve(a);
+  const y = realPath(b) ?? path.resolve(b);
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+};
+const hasConfig = (dir) => ['nauraiz-dev.json', 'nauraiz-dev.local.json'].some((f) => existsSync(path.join(dir, '.claude', f)));
+
+/**
+ * The project root for a run started in `start`: the nearest directory at or above it that has
+ * `.claude/nauraiz-dev.json` or `.claude/nauraiz-dev.local.json`. The walk stops after the git
+ * top-level (so a config in a parent repo is never picked up) or at the filesystem root. No config
+ * found: `start` itself. `gitTop(dir)` returns the git top-level or null (injectable).
+ */
+export function findProjectRoot(start, gitTop = gitTopLevel) {
+  const from = path.resolve(start);
+  let top = null;
+  try { top = gitTop(from); } catch { top = null; }
+  let dir = from;
+  for (;;) {
+    if (hasConfig(dir)) return dir;
+    if (top && sameDir(dir, top)) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return from;
+}
+
 function parseArgs(argv) {
-  const opts = { plan: undefined, only: undefined, cwd: process.cwd() };
+  const opts = { plan: undefined, only: undefined, cwd: undefined };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s);
     const value = () => (inline !== undefined ? inline : argv[++i]);
@@ -121,11 +158,16 @@ function parseArgs(argv) {
 /**
  * The CLI: returns the exit code instead of exiting. 0 every command passed, 1 a command failed (or no
  * command matched --only), 2 no gate configured, 3 the runner itself failed. A config error always goes
- * to stderr first. `out`, `err` and `run` are injectable for tests.
+ * to stderr first. Without `--cwd` the project root is found by walking up from `start` (see
+ * `findProjectRoot`); one stderr line names the root the commands run in. `out`, `err`, `run`, `start`
+ * and `gitTop` are injectable for tests.
  */
-export async function main(argv, { out = console.log, err = console.error, run = runGate } = {}) {
+export async function main(argv, { out = console.log, err = console.error, run = runGate, start = process.cwd(), gitTop } = {}) {
   try {
-    const { plan, only, cwd } = parseArgs(argv);
+    const parsed = parseArgs(argv);
+    const { plan, only } = parsed;
+    const cwd = parsed.cwd ?? findProjectRoot(start, gitTop);
+    err(`nauraiz-dev gate: project root ${cwd}`);
     const { config, error } = loadConfig(cwd);
     if (error) err(`nauraiz-dev: ${error}`);
     const hasGate = Object.values(config.gate ?? {}).some((v) => typeof v === 'string' && v.trim() !== '');

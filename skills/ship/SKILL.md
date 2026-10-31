@@ -37,8 +37,7 @@ Rules for every step:
 
 2. **Base.** If `git status --porcelain --untracked-files=no`, leaving out the plan file
    (step 4 commits it), prints anything, stop and ask the owner to commit or stash it:
-   the gate runs on the working tree, but the push sends HEAD. Then `git rev-list --count HEAD..origin/<base>`. If 0, go on. Otherwise
-   read `git log --oneline origin/<base>..HEAD`:
+   the gate runs on the working tree, but the push sends HEAD. Then `git rev-list --count HEAD..origin/<base>`. If 0, go on. Otherwise read `git log --oneline origin/<base>..HEAD`:
    - Branch already on origin: rebasing would need a force push. Stop; say how far behind
      it is and ask: merge `origin/<base>` into it, or ship as it is.
    - Commits that are not this task's (another issue, another author): stop and list them.
@@ -58,11 +57,12 @@ Rules for every step:
    and it is tracked (`git ls-files <plan>` prints it) or the project commits plans
    (`git ls-tree -r --name-only origin/<base> -- <plan.dir>` lists a file). Never commit an
    untracked plan in local mode. Committing before the gate makes the pushed HEAD the
-   gated HEAD with no rewrite. That covers tracked files only:
-   an untracked file the gate reads is not pushed; tell the owner to add it or ignore it.
+   gated HEAD with no rewrite. That covers tracked files only: an untracked file the gate reads is not pushed; tell the owner to add it or ignore it.
 
 5. **Gate.** Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs" --plan <plan>` (no plan:
-   drop `--plan`). Exit 1: stop and paste the output. Exit 2: quote every `nauraiz-dev:`
+   drop `--plan`) once, from any folder in the project; it prints every exit code, so
+   never append `echo $?`, pipes or `cd`; re-run only after you changed code. Exit 1:
+   stop and paste the output. Exit 2: quote every `nauraiz-dev:`
    line first. A line other than `no gate configured …` that names a config file means
    the config failed to load: stop, say it needs fixing, and never offer to ship without a gate.
    Otherwise ask "No gate configured. Ship without one?". Exit 3 (the runner failed): stop

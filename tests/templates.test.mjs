@@ -145,7 +145,7 @@ function taskSkill(name) {
 
 test('start-task skill: frontmatter, the nine steps in order, collision, exploration, approval rule, gate', () => {
   const { fm, body } = taskSkill('start-task');
-  assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/task\/collision\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/gate\/run\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/show\.mjs" \*\) Bash\(gh issue view \*\) Bash\(git fetch \*\) Bash\(git rev-list \*\) Bash\(git branch --show-current\) Read Glob Grep$/m);
+  assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/task\/preflight\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/task\/collision\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/gate\/run\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/show\.mjs" \*\) Bash\(gh issue view \*\) Bash\(git fetch \*\) Bash\(git rev-list \*\) Bash\(git branch --show-current\) Read Glob Grep$/m);
   const steps = ['Identify', 'Collision check', 'Base check', 'Triage', 'Ask when it matters', 'Route the process', 'Explore cheaply', 'Plan', 'Build, gate, report'];
   let at = -1;
   steps.forEach((s, i) => {
@@ -157,11 +157,19 @@ test('start-task skill: frontmatter, the nine steps in order, collision, explora
     'node "${CLAUDE_PLUGIN_ROOT}/scripts/task/collision.mjs"', '`taken`', '`unknown`', '`ours`', '`free`',
     '`Explore`', 'models.explore', '~5 files', '~800 lines', APPROVAL_RULE,
     'node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" skills/start-task/reference.md',
-    'node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"', 'grill', 'gh issue view', 'git rev-list', 'branch.base',
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"', 'grill', 'gh issue view', 'branch.base',
     'even if `gh issue view` failed', 'prints no `verdict`', 'one process per phase',
     'that is the Plan phase', 'matches `sharedPaths`', 'run `grill` again before building',
     '`--branch <current branch>` when the issue',
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/task/preflight.mjs"', 'ONE call for steps 1 to 3', 'make no other `gh` or `git` call',
+    '`collision.verdict`', '`fetched` false', '`ahead` is 0', 'once, from any folder in the project',
+    'never append `echo $?`, pipes or `cd`', 'Re-run only after you changed code',
   ]) assert.ok(body.includes(needle), `start-task must mention ${needle}`);
+  // the plugin's reference file is read once, at routing, and never for a small task
+  assert.equal(body.split('scripts/show.mjs').length - 1, 1, 'reference.md is read in one place');
+  assert.ok(body.indexOf('scripts/show.mjs') > body.indexOf('\n6. **Route the process.**'), 'read at step 6, not at triage');
+  assert.ok(body.includes('never read `reference.md`'), 'small tasks never read it');
+  assert.doesNotMatch(body, /git fetch origin|git rev-list --count/, 'the fetch and the counts come from preflight');
 });
 
 test('start-task reference: the routing table and the plan rules', () => {
@@ -266,6 +274,8 @@ test('gate skill: one runner call, exit codes 0/1/2, paste the output, no re-run
     'no plan for this branch (pass --plan)', 'exit 0 but', 'verbatim', 'Never re-run', 'unless the runner reported',
     'never the gate result', '`nauraiz-dev:`', 'config failed to load', 'Any other non-zero exit',
     '`3`', 'gate runner failed', 'whatever the exit code',
+    'once, from any folder in the project', "prints every command's exit code itself", 'never append `echo $?`, pipes',
+    'or `cd`', 'Re-run only after you changed code', 'nauraiz-dev gate: project root',
   ]) assert.ok(body.includes(needle), `gate must mention ${needle}`);
   assert.doesNotMatch(body, /scripts\\gate/, 'forward slashes only: the Stop hook looks for scripts/gate/run.mjs');
 });
@@ -294,6 +304,7 @@ test('ship skill: user-only, the seven steps in order, approvals panel, PR body 
     'gh pr view <branch> --json url,state', 'instead of `gh pr create`',
     'leaving out the plan file', 'git status --porcelain -- <plan>', 'covers tracked files', 'untracked file the gate reads',
     'docs: plan for <branch>', 'Any other non-zero exit',
+    'once, from any folder in the project', 'never append `echo $?`, pipes or `cd`', 're-run only after you changed code',
   ]) assert.ok(body.includes(needle), `ship must mention ${needle}`);
   assert.doesNotMatch(body, /which to keep/, 'ship never rewrites history to drop commits');
   assert.doesNotMatch(body, /For each section/, 'the PR template is shown once');
@@ -335,6 +346,7 @@ test('review skill: two modes, reviewer agent on a diff file, gate in a temp wor
     'git worktree add --detach', '--cwd', 'git worktree remove --force', 'even when a step failed', '/code-review',
     '"Approved"', 'says "merge"', 'branch.merge', 'gh pr merge <n>', 'kickoff-prompt', 'After a merge only',
     'git branch --show-current', 'gh pr checkout',
+    'once, from any folder in the project', 'never append `echo $?`, pipes or `cd`', 'no `echo $?`,',
   ]) assert.ok(body.includes(needle), `review must mention ${needle}`);
 });
 

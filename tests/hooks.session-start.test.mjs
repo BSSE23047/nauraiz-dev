@@ -48,6 +48,6 @@ test('local-only repo gets mode=local, the gate line with the expanded plugin ro
 test('local-only repo without CLAUDE_PLUGIN_ROOT gets the /nauraiz-dev:gate pointer', async () => {
   const { stdout } = await runHook('session-start', { cwd: fx('local-only'), source: 'startup' }, { CLAUDE_PLUGIN_ROOT: '' });
   const ctx = JSON.parse(stdout).hookSpecificOutput.additionalContext;
-  assert.match(ctx, /^Gate: test \(run \/nauraiz-dev:gate; /m);
+  assert.match(ctx, /^Gate: test \(run \/nauraiz-dev:gate once, from any folder in the project; /m);
   assert.doesNotMatch(ctx, /\$\{CLAUDE_PLUGIN_ROOT\}/);
 });

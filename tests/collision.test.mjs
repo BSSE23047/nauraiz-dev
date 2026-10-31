@@ -301,3 +301,11 @@ test('CLI: missing issue argument still prints JSON and exits 0', () => {
   assert.equal(res.status, 0);
   assert.equal(JSON.parse(res.stdout).verdict, 'unknown');
 });
+
+test('issueData given: gh issue view is not called and the data is used', async () => {
+  const gh = ghStub({ issue: bad('should not be asked') });
+  const r = await run({ gh, git: gitStub(), issueData: { assignees: [{ login: 'other-dev' }], body: 'Branch: `feature/27-x`' } });
+  assert.equal(r.verdict, 'taken');
+  assert.equal(r.remoteBranch.name, 'feature/27-x');
+  assert.equal(gh.calls.filter((a) => a[0] === 'issue').length, 0);
+});

@@ -102,14 +102,14 @@ test('local-only config shows mode=local and the gate line with the expanded run
   const lines = t.split('\n');
   assert.match(lines[0], / · mode=local$/);
   assert.equal(lines[1], START_LINE);
-  assert.ok(lines.includes('Gate: test (run node "C:/Users/dev/.claude/plugins/nauraiz-dev/scripts/gate/run.mjs"; read real exit codes, never a grepped summary)'));
+  assert.ok(lines.includes('Gate: test (run node "C:/Users/dev/.claude/plugins/nauraiz-dev/scripts/gate/run.mjs" once, from any folder in the project; it prints every exit code, so never append echo $?, pipes or cd; re-run only after you changed code)'));
   assert.doesNotMatch(t, /\$\{CLAUDE_PLUGIN_ROOT\}/);
   assert.ok(t.length <= MAX_CONTEXT_CHARS);
 });
 
 test('local-only gate line without a plugin root points at /nauraiz-dev:gate, never a literal ${CLAUDE_PLUGIN_ROOT}', () => {
   const t = build('local-only');
-  assert.ok(t.split('\n').includes('Gate: test (run /nauraiz-dev:gate; read real exit codes, never a grepped summary)'));
+  assert.ok(t.split('\n').includes('Gate: test (run /nauraiz-dev:gate once, from any folder in the project; it prints every exit code, so never append echo $?, pipes or cd; re-run only after you changed code)'));
   assert.doesNotMatch(t, /\$\{CLAUDE_PLUGIN_ROOT\}/);
 });
 

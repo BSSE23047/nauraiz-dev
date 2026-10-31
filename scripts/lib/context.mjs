@@ -77,7 +77,7 @@ export function buildSessionContext({ cwd, config, found, error, branch, plan, s
       ? `node "${pluginRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/scripts/gate/run.mjs"`
       : '/nauraiz-dev:gate';
     out.push(gate.length
-      ? `Gate: ${gate.join(', ')} (run ${run}; read real exit codes, never a grepped summary)`
+      ? `Gate: ${gate.join(', ')} (run ${run} once, from any folder in the project; it prints every exit code, so never append echo $?, pipes or cd; re-run only after you changed code)`
       : 'Gate: none configured');
   }
   if (superpowers && !(superpowers.installed && superpowers.enabled)) {

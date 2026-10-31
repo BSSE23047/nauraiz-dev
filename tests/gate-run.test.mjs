@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
-import { runGate, substitute, formatGate, FAIL_SUMMARY, main } from '../scripts/gate/run.mjs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { runGate, substitute, formatGate, FAIL_SUMMARY, main, findProjectRoot } from '../scripts/gate/run.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fxGate = path.join(here, 'fixtures', 'gate');
@@ -202,4 +202,95 @@ test('main returns 0 green, 1 red, 2 no gate; the CLI sets process.exitCode and 
     assert.equal(await main(['--cwd', dir], quiet), 2);
   } finally { rmSync(dir, { recursive: true, force: true }); }
   assert.doesNotMatch(readFileSync(cli, 'utf8'), /process\.exit\(/);
+});
+
+/** A temp tree with a config file in `root` and an empty `sub` folder two levels down. */
+function tree(configFile = 'nauraiz-dev.json') {
+  const top = realpathSync.native(tmp());
+  const root = path.join(top, 'repo');
+  const sub = path.join(root, 'apps', 'server');
+  mkdirSync(path.join(root, '.claude'), { recursive: true });
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(path.join(root, '.claude', configFile), JSON.stringify({ gate: { a: node('pass.mjs') } }));
+  return { top, root, sub };
+}
+
+test('findProjectRoot: from a subfolder it finds the nearest folder with a project or a local config', () => {
+  for (const file of ['nauraiz-dev.json', 'nauraiz-dev.local.json']) {
+    const { top, root, sub } = tree(file);
+    try {
+      assert.equal(findProjectRoot(sub, () => null), root, file);
+      assert.equal(findProjectRoot(root, () => null), root, 'already at the root');
+    } finally { rmSync(top, { recursive: true, force: true }); }
+  }
+});
+
+test('findProjectRoot: the nearest config wins over one further up', () => {
+  const { top, root, sub } = tree();
+  try {
+    mkdirSync(path.join(root, 'apps', '.claude'));
+    writeFileSync(path.join(root, 'apps', '.claude', 'nauraiz-dev.json'), '{}');
+    assert.equal(findProjectRoot(sub, () => null), path.join(root, 'apps'));
+  } finally { rmSync(top, { recursive: true, force: true }); }
+});
+
+test('findProjectRoot: stops at the git top-level, never reading a config in a parent repo', () => {
+  const { top, root, sub } = tree();
+  try {
+    const inner = path.join(root, 'vendor', 'lib');
+    mkdirSync(path.join(inner, 'src'), { recursive: true });
+    assert.equal(findProjectRoot(path.join(inner, 'src'), () => inner), path.join(inner, 'src'), 'no config up to the git top: the start folder');
+    // a config at the git top-level itself still counts
+    assert.equal(findProjectRoot(sub, () => root), root);
+  } finally { rmSync(top, { recursive: true, force: true }); }
+});
+
+test('findProjectRoot: no config anywhere, or a failing git, gives the start folder', () => {
+  const dir = realpathSync.native(tmp());
+  try {
+    assert.equal(findProjectRoot(dir, () => null), dir);
+    assert.equal(findProjectRoot(dir, () => { throw new Error('no git'); }), dir);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('main: from a subfolder it runs the commands in the project root and says so on stderr', async () => {
+  const { top, root, sub } = tree();
+  try {
+    const out = [];
+    const err = [];
+    let seen;
+    const code = await main([], {
+      out: (s) => out.push(s), err: (s) => err.push(s), start: sub, gitTop: () => root,
+      run: async (o) => { seen = o.cwd; return { ok: true, results: [{ name: 'a', command: 'c', code: 0, ms: 1, tail: '', status: 'pass', why: '' }] }; },
+    });
+    assert.equal(code, 0);
+    assert.equal(seen, root);
+    assert.deepEqual(err, [`nauraiz-dev gate: project root ${root}`]);
+  } finally { rmSync(top, { recursive: true, force: true }); }
+});
+
+test('main: --cwd wins and is not walked up from', async () => {
+  const { top, root, sub } = tree();
+  try {
+    const err = [];
+    let seen;
+    // sub has no config of its own; with --cwd the runner must be started in sub (exit 2: no gate), not in root
+    const code = await main(['--cwd', sub], {
+      out: () => {}, err: (s) => err.push(s), start: root, gitTop: () => root,
+      run: async (o) => { seen = o.cwd; return { ok: true, results: [] }; },
+    });
+    assert.equal(code, 2);
+    assert.equal(seen, undefined);
+    assert.deepEqual(err, [`nauraiz-dev gate: project root ${sub}`]);
+  } finally { rmSync(top, { recursive: true, force: true }); }
+});
+
+test('CLI: started in a subfolder of the project it still runs the gate and names the root', () => {
+  const { top, root, sub } = tree();
+  try {
+    const r = spawnSync(process.execPath, [cli], { cwd: sub, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /\| a \| pass \| 0 \|/);
+    assert.ok(r.stderr.includes(`nauraiz-dev gate: project root ${root}`), r.stderr);
+  } finally { rmSync(top, { recursive: true, force: true }); }
 });
