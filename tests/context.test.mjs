@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, MAX_CONTEXT_CHARS } from '../scripts/lib/config.mjs';
 import { buildSessionContext, truncate } from '../scripts/lib/context.mjs';
-import { fx } from './helpers.mjs';
+import { fx, shortPath } from './helpers.mjs';
 
 const START_LINE = 'Task start: run /nauraiz-dev:start-task on the first substantive request (checks who owns the issue, asks before building, routes the process); to push and open a PR: /nauraiz-dev:ship.';
 
@@ -160,7 +160,7 @@ test('a mockupRoot link that leaves the folder is flagged with the real path', (
       cwd: dir, found: true, error: null, branch: null, plan: null,
       config: { enforcement: 'guided', state: 'none', mockupRoot: 'mockups' },
     });
-    const real = realpathSync(outside);
+    const real = realpathSync.native(outside);
     assert.ok(out.split('\n').includes(`Mockup root resolves outside this folder (${real}); project hooks may deny it: copy it instead of linking.`));
     assert.match(out, /^Mockup root: mockups$/m);
   } finally {
@@ -180,4 +180,17 @@ test('a mockupRoot inside the folder gets no warning; a missing one is reported'
     assert.doesNotMatch(withRoot('mockups'), /resolves outside|not found/);
     assert.match(withRoot('gone'), /^Mockup root not found: gone$/m);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a mockupRoot inside the folder is not flagged when cwd is an 8.3 short path and the root a long one', (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-ctx-shortname-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(path.join(dir, 'mockups'));
+  const short = shortPath(dir);
+  if (!short) { t.skip('no 8.3 short name here (not win32, or 8.3 names disabled)'); return; }
+  const out = buildSessionContext({
+    cwd: short, found: true, error: null, branch: null, plan: null,
+    config: { enforcement: 'guided', state: 'none', mockupRoot: path.join(realpathSync.native(dir), 'mockups') },
+  });
+  assert.doesNotMatch(out, /resolves outside|not found/);
 });

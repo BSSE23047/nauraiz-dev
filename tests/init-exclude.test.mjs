@@ -12,7 +12,7 @@ const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8',
 
 /** A temp git repo with one commit, at its real (symlink-free) path. */
 function tmpRepo(t) {
-  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'nd-excl-')));
+  const dir = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'nd-excl-')));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   git(dir, 'init', '-q');
   git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
@@ -101,7 +101,7 @@ test('worktree: writes to the common git dir, with the worktree-relative prefix'
   mkdirSync(path.join(wt, 'pkg'));
   const r = addExcludes(path.join(wt, 'pkg'), ['.claude/settings.local.json']);
   assert.deepEqual(r.added, ['pkg/.claude/settings.local.json']);
-  assert.equal(path.resolve(r.file), path.join(repo, '.git', 'info', 'exclude'));
+  assert.equal(realpathSync.native(r.file), realpathSync.native(path.join(repo, '.git', 'info', 'exclude')));
   assert.ok(!existsSync(path.join(wt, '.git', 'info')), 'a worktree .git is a file, never a dir');
 });
 

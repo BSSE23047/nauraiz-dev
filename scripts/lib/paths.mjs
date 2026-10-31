@@ -1,7 +1,19 @@
 // Cross-platform path helpers: no dependencies, same results for Windows
-// inputs on any OS (the hook may be tested on macOS with D:\ strings).
+// inputs on any OS (the hook may be tested on macOS with D:\ strings). realPath is the one helper that
+// touches the file system.
+import { realpathSync } from 'node:fs';
 
 const DRIVE = /^[A-Za-z]:\//;
+
+/**
+ * The real path of `p` in long form: `realpathSync.native` (expands Windows 8.3 short names such as
+ * RUNNER~1, which git never prints), else the JS realpath, else null when `p` does not resolve.
+ * Use it on both sides whenever a path from git or the OS is compared with a cwd-derived one.
+ */
+export function realPath(p) {
+  try { return realpathSync.native(p); } catch { /* fall back to the JS implementation */ }
+  try { return realpathSync(p); } catch { return null; }
+}
 
 /**
  * Backslashes to `/`, then resolve segments: collapse `//`, drop `.`, apply

@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalize, toRelative, matchesAny } from '../scripts/lib/paths.mjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { normalize, toRelative, matchesAny, realPath } from '../scripts/lib/paths.mjs';
+import { shortPath } from './helpers.mjs';
 
 function withPlatform(value, fn) {
   const desc = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -169,4 +173,14 @@ test('directory semantics keep the old guarantees', () => {
   assert.ok(matchesAny('Generated/a.js', ['**/Generated*/**']));
   assert.ok(!matchesAny('src/app/custom/a.json', ['**/Generated*/**']));
   assert.ok(!matchesAny('backend', ['backend/**']));
+});
+
+test('realPath expands an 8.3 short name to the long form and gives null for a missing path', (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-paths-shortname-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  assert.equal(realPath(path.join(dir, 'missing')), null);
+  const short = shortPath(dir);
+  if (!short) { t.skip('no 8.3 short name here (not win32, or 8.3 names disabled)'); return; }
+  assert.equal(realPath(short).toLowerCase(), realPath(dir).toLowerCase());
+  assert.doesNotMatch(realPath(short), /~\d/);
 });

@@ -2,10 +2,11 @@
 // Skills use this instead of reading plugin files directly: a project's own scope hook
 // may deny reads outside the repo, and the plugin cache is outside every repo.
 // Usage: node show.mjs <path relative to the plugin root>, e.g. templates/CLAUDE.md
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMain } from './lib/main.mjs';
+import { realPath } from './lib/paths.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ALLOWED_DIRS = ['templates', 'skills', 'agents'];
@@ -17,14 +18,12 @@ export function resolveShown(rel) {
   if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) return null;
   const top = inside.split(path.sep)[0];
   if (!ALLOWED_DIRS.includes(top)) return null;
-  try {
-    const real = realpathSync(full);
-    const realInside = path.relative(realpathSync(root), real);
-    if (realInside.startsWith('..') || path.isAbsolute(realInside)) return null;
-    return real;
-  } catch {
-    return null;
-  }
+  const real = realPath(full);
+  const realRoot = realPath(root);
+  if (real === null || realRoot === null) return null;
+  const realInside = path.relative(realRoot, real);
+  if (realInside.startsWith('..') || path.isAbsolute(realInside)) return null;
+  return real;
 }
 
 if (isMain(import.meta.url)) {

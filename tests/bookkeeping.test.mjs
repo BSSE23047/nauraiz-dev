@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isBookkeeping, isUnderPlanDir } from '../scripts/lib/bookkeeping.mjs';
+import { shortPath } from './helpers.mjs';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -78,4 +79,15 @@ test('a git dir inside the project is found through a symlinked cwd (git reports
   }
   assert.equal(isBookkeeping('meta/gitdata/HEAD', config, link), true);
   assert.equal(isBookkeeping('meta/other.txt', config, link), false);
+});
+
+test('a git dir inside the project is found when cwd is an 8.3 short path (git prints the long form)', (t) => {
+  const repo = mkdtempSync(path.join(os.tmpdir(), 'nd-bk-shortname-'));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  mkdirSync(path.join(repo, 'meta'));
+  execFileSync('git', ['init', '-q', `--separate-git-dir=${path.join(repo, 'meta', 'gitdata')}`, repo], { stdio: 'ignore' });
+  const short = shortPath(repo);
+  if (!short) { t.skip('no 8.3 short name here (not win32, or 8.3 names disabled)'); return; }
+  assert.equal(isBookkeeping('meta/gitdata/HEAD', config, short), true);
+  assert.equal(isBookkeeping('meta/other.txt', config, short), false);
 });

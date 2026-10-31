@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
 import path from 'node:path';
-import { matchesAny, normalize, toRelative } from './paths.mjs';
+import { matchesAny, normalize, realPath, toRelative } from './paths.mjs';
 
 /**
  * Bookkeeping files: what the handoff writes, not the work itself. Edits to them never count as
@@ -24,22 +23,18 @@ function gitDirPatterns(cwd) {
   if (typeof cwd !== 'string' || !cwd) return [];
   if (gitDirCache.has(cwd)) return gitDirCache.get(cwd);
   const out = [];
-  // git reports real paths; a cwd reached through a link (macOS /var -> /private/var) must be compared both ways
-  const bases = [cwd];
-  try {
-    const real = realpathSync(cwd);
-    if (real !== cwd) bases.push(real);
-  } catch {
-    // an unresolvable cwd is compared as given
-  }
+  // git reports real, long-form paths; a cwd reached through a link (macOS /var -> /private/var) or an 8.3
+  // short name (Windows RUNNER~1) differs, so each side is compared as given and as its native realpath.
+  const both = (p) => [...new Set([p, realPath(p)].filter(Boolean))];
+  const bases = both(cwd);
   const isOutside = (rel) => rel === '' || rel === '..' || rel.startsWith('../') || rel.startsWith('/') || /^[A-Za-z]:/.test(rel);
   try {
     const lines = execFileSync('git', ['rev-parse', '--absolute-git-dir', '--git-common-dir'], {
       cwd, stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, encoding: 'utf8',
     }).split(/\r?\n/).filter(Boolean);
     for (const line of lines) {
-      const abs = path.resolve(cwd, line);
-      const rel = bases.map((base) => toRelative(base, abs)).find((r) => !isOutside(r));
+      const targets = both(path.resolve(cwd, line));
+      const rel = bases.flatMap((base) => targets.map((abs) => toRelative(base, abs))).find((r) => !isOutside(r));
       if (rel !== undefined && !out.includes(`/${rel}/`)) out.push(`/${rel}/`);
     }
   } catch {

@@ -1,7 +1,8 @@
-import { readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAX_CONTEXT_CHARS } from './config.mjs';
+import { realPath } from './paths.mjs';
 
 const SUFFIX = '…[truncated]';
 const SESSION_LINES = 20;
@@ -39,19 +40,14 @@ const toPosix = (p) => p.split(path.sep).join('/');
  * else null. Project hooks may deny a path outside the folder, so a link out of it is worth saying.
  */
 function mockupRootWarning(cwd, mockupRoot) {
-  let real;
-  try {
-    real = realpathSync(path.resolve(cwd, mockupRoot));
-  } catch {
-    return `Mockup root not found: ${mockupRoot}`;
-  }
-  try {
-    const rel = path.relative(realpathSync(cwd), real);
-    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-      return `Mockup root resolves outside this folder (${real}); project hooks may deny it: copy it instead of linking.`;
-    }
-  } catch {
-    // an unresolvable cwd gives nothing to compare against
+  // native realpath on both sides, so an 8.3 short name on one side is not read as "outside"
+  const real = realPath(path.resolve(cwd, mockupRoot));
+  if (real === null) return `Mockup root not found: ${mockupRoot}`;
+  const realCwd = realPath(cwd);
+  if (realCwd === null) return null; // an unresolvable cwd gives nothing to compare against
+  const rel = path.relative(realCwd, real);
+  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    return `Mockup root resolves outside this folder (${real}); project hooks may deny it: copy it instead of linking.`;
   }
   return null;
 }
