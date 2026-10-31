@@ -65,8 +65,8 @@ Rules for every step:
    drop `--plan`). Exit 1: stop and paste the output. Exit 2: quote every `nauraiz-dev:`
    line first. A line other than `no gate configured …` that names a config file means
    the config failed to load: stop, say it needs fixing, and never offer to ship without a gate.
-   Otherwise ask "No gate configured. Ship without one?". Any other non-zero exit: stop
-   and quote the output. Keep the output for step 6.
+   Otherwise ask "No gate configured. Ship without one?". Exit 3 (the runner failed): stop
+   and quote the output. Any other non-zero exit: the same. Keep the output for step 6.
 
 6. **PR body.** If `gh pr view <branch> --json url,state` shows an `OPEN` PR, skip this
    step. Headings, first match wins:

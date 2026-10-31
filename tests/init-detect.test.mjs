@@ -207,3 +207,10 @@ test('CLI output includes the new fields', async () => {
   assert.equal(d.offeredGate.check, 'npm run check');
   assert.deepEqual(d.planKinds, ['feature', 'bugfix', 'chore', 'refactor']);
 });
+
+test('offeredGate skips scripts whose name contains watch (they never exit)', (t) => {
+  const dir = tmpRepo(t, {
+    'package.json': JSON.stringify({ scripts: { 'check:watch': 'tsc --noEmit -w', 'typecheck-watch': 'x', 'watch:e2e': 'x', 'Watch-Verify': 'x', check: 'x' } }),
+  });
+  assert.deepEqual(detect(dir).offeredGate, { check: 'npm run check' });
+});

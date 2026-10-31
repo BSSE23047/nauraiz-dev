@@ -118,21 +118,32 @@ function parseArgs(argv) {
   return opts;
 }
 
-async function main() {
-  const { plan, only, cwd } = parseArgs(process.argv.slice(2));
-  const { config, error } = loadConfig(cwd);
-  const hasGate = Object.values(config.gate ?? {}).some((v) => typeof v === 'string' && v.trim() !== '');
-  if (!hasGate) {
-    if (error) console.error(`nauraiz-dev: ${error}`);
-    console.log('nauraiz-dev: no gate configured in .claude/nauraiz-dev(.local).json');
-    process.exit(2);
+/**
+ * The CLI: returns the exit code instead of exiting. 0 every command passed, 1 a command failed (or no
+ * command matched --only), 2 no gate configured, 3 the runner itself failed. A config error always goes
+ * to stderr first. `out`, `err` and `run` are injectable for tests.
+ */
+export async function main(argv, { out = console.log, err = console.error, run = runGate } = {}) {
+  try {
+    const { plan, only, cwd } = parseArgs(argv);
+    const { config, error } = loadConfig(cwd);
+    if (error) err(`nauraiz-dev: ${error}`);
+    const hasGate = Object.values(config.gate ?? {}).some((v) => typeof v === 'string' && v.trim() !== '');
+    if (!hasGate) {
+      out('nauraiz-dev: no gate configured in .claude/nauraiz-dev(.local).json');
+      return 2;
+    }
+    const { ok, results } = await run({ cwd, config, plan, only });
+    if (results.length === 0) out(`nauraiz-dev: no gate command named ${(only ?? []).join(', ')}`);
+    else out(formatGate(results));
+    return ok ? 0 : 1;
+  } catch (e) {
+    err(`nauraiz-dev: gate runner failed: ${e?.message ?? e}`);
+    return 3;
   }
-  const { ok, results } = await runGate({ cwd, config, plan, only });
-  if (results.length === 0) console.log(`nauraiz-dev: no gate command named ${only.join(', ')}`);
-  else console.log(formatGate(results));
-  process.exit(ok ? 0 : 1);
 }
 
 if (isMain(import.meta.url)) {
-  main().catch((e) => { console.error(`nauraiz-dev: ${e.message}`); process.exit(1); });
+  // set exitCode rather than exiting at once, so piped stdout is flushed
+  process.exitCode = await main(process.argv.slice(2));
 }

@@ -84,7 +84,7 @@ function offeredGates(scripts, makefile, skip) {
   const taken = (name) => skip.includes(name) || name in offered;
   for (const [name, cmd] of Object.entries(scripts)) {
     const lower = name.toLowerCase();
-    if (name === 'test' || taken(name) || typeof cmd !== 'string' || !cmd.trim()) continue;
+    if (name === 'test' || lower.includes('watch') || taken(name) || typeof cmd !== 'string' || !cmd.trim()) continue; // a watcher never exits
     if (OFFER_WORDS.some((w) => lower.includes(w))) offered[name] = `npm run ${name}`;
   }
   for (const line of (makefile ?? '').split(/\r?\n/)) {

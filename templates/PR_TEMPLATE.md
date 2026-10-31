@@ -12,11 +12,11 @@ What changed and why, in two or three sentences. Closes #{{issue}}.
 
 ## Gate output
 
-Each gate command, its exit code and its summary line, as run on the last commit of this
-branch. A summary line alone is not proof: a piped summary can exit 0 while tests fail.
+Run on the last commit of this branch: paste the gate runner's output verbatim (its table
+and every block), not a summary line. A piped summary can exit 0 while tests fail.
 
 ```
-{{name}}: exit {{code}} — {{summary line}}
+{{gate runner output}}
 ```
 
 ## Decisions to confirm

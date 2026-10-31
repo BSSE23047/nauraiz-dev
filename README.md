@@ -110,7 +110,7 @@ Project settings live in `.claude/nauraiz-dev.json`, committed with the repo and
 | `mockupRoot` | Local folder of design mockups. Set it in `.local.json`; it is shown at session start. | unset |
 | `pr` | Section headings for pull request descriptions, used when the repo has no recent PR by you to copy the format from. | Summary, Steps ↔ commits, Gate output, Decisions to confirm, Risks, Unverified |
 
-The gate runner (`scripts/gate/run.mjs`, called by the `gate` skill) runs each `gate` command in order through the platform shell, prints a table with exit code and duration plus the last lines of each command, and exits non-zero if any failed. A command that exits 0 but prints a failing summary (`FAIL  1 file(s)`, `Tests  1 failed`, `# fail 1`) is reported red. It writes nothing into your repo.
+The gate runner (`scripts/gate/run.mjs`, called by the `gate` skill) runs each `gate` command in order through the platform shell, prints a table with exit code and duration plus the last lines of each command, and exits non-zero if any failed. A command that exits 0 but prints a failing summary (`FAIL  1 file(s)`, `Tests  1 failed`, `# fail 1`) is reported red. That check errs toward red: a passing test whose name reads like a failure count (`3 failed uploads`) can flag a command, and the runner's table names the reason. It writes nothing into your repo. Exit codes: 0 all passed, 1 a command failed, 2 no gate configured, 3 the runner itself failed.
 
 ## Numbers
 

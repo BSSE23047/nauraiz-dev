@@ -75,6 +75,7 @@ test('state templates: backlog shows no fake item to the session hook, completed
 test('PR template has every configured section', () => {
   const text = tpl('PR_TEMPLATE.md');
   for (const s of DEFAULTS.pr.sections) assert.ok(text.includes(`\n## ${s}\n`), `missing ${s}`);
+  assert.ok(text.includes("paste the gate runner's output verbatim"), 'gate section matches ship: the runner output, verbatim');
 });
 
 test('init skill frontmatter', () => {
@@ -246,10 +247,12 @@ test('gate skill: one runner call, exit codes 0/1/2, paste the output, no re-run
   const { fm, body } = taskSkill('gate');
   const tools = /^allowed-tools: (.*)$/m.exec(fm)?.[1] ?? '';
   assert.ok(tools.includes(RUN_GATE_TOOL), 'gate pre-approves the runner');
+  assert.ok(tools.includes('Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs") '), 'gate pre-approves the bare call too');
   for (const needle of [
     GATE_CMD, '--plan <path>', '--only', '`0`', '`1`', '`2`', 'no gate is configured', '/nauraiz-dev:init',
     'no plan for this branch (pass --plan)', 'exit 0 but', 'verbatim', 'Never re-run', 'unless the runner reported',
     'never the gate result', '`nauraiz-dev:`', 'config failed to load', 'Any other non-zero exit',
+    '`3`', 'gate runner failed', 'whatever the exit code',
   ]) assert.ok(body.includes(needle), `gate must mention ${needle}`);
   assert.doesNotMatch(body, /scripts\\gate/, 'forward slashes only: the Stop hook looks for scripts/gate/run.mjs');
 });
@@ -291,6 +294,7 @@ test('ship skill: user-only, the seven steps in order, approvals panel, PR body 
     'gh pr list --state merged --author @me --limit 1 --json number', 'gh pr view <n> --json body', '`pr.sections`',
     'node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" templates/PR_TEMPLATE.md', 'verbatim', '## Not verified', 'attribution',
     'git rev-parse --git-path', 'gh pr create', '--body-file', 'Never `--force`', 'never merge', 'do not ask again',
+    'Exit 3 (the runner failed)',
   ]) assert.ok(body.includes(needle), `ship must mention ${needle}`);
 });
 

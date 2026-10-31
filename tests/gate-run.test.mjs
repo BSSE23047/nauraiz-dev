@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { runGate, substitute, formatGate, FAIL_SUMMARY } from '../scripts/gate/run.mjs';
+import { readFileSync } from 'node:fs';
+import { runGate, substitute, formatGate, FAIL_SUMMARY, main } from '../scripts/gate/run.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fxGate = path.join(here, 'fixtures', 'gate');
@@ -156,4 +157,49 @@ test('CLI: --plan reaches ${plan}; a missing plan fails the command', () => {
     const given = spawnSync(process.execPath, [cli, '--cwd', dir, '--plan', path.join(dir, 'x y.md')], { encoding: 'utf8' });
     assert.equal(given.status, 0, given.stdout + given.stderr);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('CLI: a config error is written to stderr (prefixed) before the table even when a gate exists', () => {
+  const dir = tmp();
+  try {
+    mkdirSync(path.join(dir, '.claude'));
+    writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.json'), JSON.stringify({ gate: { a: node('pass.mjs') }, sharedPaths: 'src/**' }));
+    const r = spawnSync(process.execPath, [cli, '--cwd', dir], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /^nauraiz-dev: nauraiz-dev\.json: sharedPaths must be an array/m);
+    assert.match(r.stdout, /\| a \| pass \| 0 \|/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('main: a runner crash returns exit 3 with a prefixed message on stderr', async () => {
+  const dir = tmp();
+  try {
+    mkdirSync(path.join(dir, '.claude'));
+    writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.json'), JSON.stringify({ gate: { a: node('pass.mjs') } }));
+    const out = [];
+    const err = [];
+    const code = await main(['--cwd', dir], {
+      out: (s) => out.push(s), err: (s) => err.push(s),
+      run: async () => { throw new Error('boom'); },
+    });
+    assert.equal(code, 3);
+    assert.deepEqual(out, []);
+    assert.match(err.join('\n'), /^nauraiz-dev: gate runner failed: boom$/m);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('main returns 0 green, 1 red, 2 no gate; the CLI sets process.exitCode and never calls process.exit', async () => {
+  const dir = tmp();
+  try {
+    mkdirSync(path.join(dir, '.claude'));
+    const write = (gate) => writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.json'), JSON.stringify({ gate }));
+    const quiet = { out: () => {}, err: () => {} };
+    write({ a: node('pass.mjs') });
+    assert.equal(await main(['--cwd', dir], quiet), 0);
+    write({ c: node('red.mjs') });
+    assert.equal(await main(['--cwd', dir], quiet), 1);
+    write({});
+    assert.equal(await main(['--cwd', dir], quiet), 2);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.doesNotMatch(readFileSync(cli, 'utf8'), /process\.exit\(/);
 });
