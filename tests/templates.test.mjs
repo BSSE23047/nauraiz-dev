@@ -157,6 +157,7 @@ test('start-task skill: frontmatter, the nine steps in order, collision, explora
     'node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"', 'grill', 'gh issue view', 'git rev-list', 'branch.base',
     'even if `gh issue view` failed', 'prints no `verdict`', 'one process per phase',
     'that is the Plan phase', 'matches `sharedPaths`', 'run `grill` again before building',
+    '`--branch <current branch>` when the issue',
   ]) assert.ok(body.includes(needle), `start-task must mention ${needle}`);
 });
 

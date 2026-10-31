@@ -70,7 +70,7 @@ At most three questions in a round, each with a recommended answer and the cost 
 
 The reason, from the author's own use on a real project (observations, not measurements): in real runs, Claude built before asking, recorded approvals the owner had not given, and once duplicated a colleague's open pull request. So:
 
-- **Collision check.** Before work starts, `start-task` and `ship` look at who is assigned, who has an open PR that references the issue, and who pushed the branch. If it is someone else's, they stop and tell you who and where. If `gh` is missing, offline or not signed in, the answer is "unknown", never "free", and you are asked.
+- **Collision check.** Before work starts, `start-task` and `ship` look at who is assigned, who has an open PR that references the issue, and who pushed the branch. If it is someone else's, they stop and tell you who and where. If `gh` is missing, offline or not signed in, or the remote branch cannot be checked, the answer is "unknown", never "free", and you are asked.
 - **Approvals.** An `*_approval` field in a plan is `pending owner confirmation` unless you said yes in this session; then it quotes the date and your words. A hook asks before an edit writes any other value into a plan.
 - **Base check.** It says how many commits the branch is behind `origin/<base>`, and the gate compares against `origin/<base>` when the local branch is stale.
 

@@ -223,10 +223,12 @@ test('unparsable gh JSON: unknown', async () => {
   assert.equal(r.verdict, 'unknown');
 });
 
-test('ls-remote failure alone keeps the gh verdict, exists null, mentioned in reason', async () => {
+test('ls-remote failure with gh saying free: unknown (R13), exists null, mentioned in reason', async () => {
   const git = gitStub({ remote: bad('network down') });
   const r = await run({ branch: 'feature/27-x', gh: ghStub(), git });
-  assert.equal(r.verdict, 'free');
+  assert.equal(r.verdict, 'unknown');
+  assert.match(r.reason, /^unknown: /);
+  assert.match(r.reason, /network down/);
   assert.equal(r.remoteBranch.exists, null);
   assert.match(r.reason, /remote branch/i);
   assert.match(r.reason, /ls-remote/);
@@ -239,10 +241,11 @@ test('ls-remote failure still reports taken when gh says taken', async () => {
   assert.equal(r.remoteBranch.exists, null);
 });
 
-test('git runner that throws counts as a failed command', async () => {
+test('git runner that throws counts as a failed command: unknown, never free', async () => {
   const git = () => { throw new Error('git not found'); };
   const r = await run({ branch: 'feature/27-x', gh: ghStub(), git });
-  assert.equal(r.verdict, 'free');
+  assert.equal(r.verdict, 'unknown');
+  assert.match(r.reason, /git not found/);
   assert.equal(r.remoteBranch.exists, null);
 });
 

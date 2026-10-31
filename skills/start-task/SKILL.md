@@ -33,7 +33,8 @@ Rules for every step:
 
 2. **Collision check.** With an issue number, even if `gh issue view` failed, run
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/task/collision.mjs" <n>` (add `--branch <name>`
-   when the request names a branch) and read `verdict`. If the script cannot run or
+   when the request names a branch, and `--branch <current branch>` when the issue
+   number came from the current branch name) and read `verdict`. If the script cannot run or
    prints no `verdict`, treat it as `unknown`.
    - `taken`: **stop.** Tell the owner who and where: the `reason`, `otherAssignees`, each
      `openPRs` number, author and head, and `remoteBranch` name and authors. Do nothing

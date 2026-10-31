@@ -119,7 +119,8 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
   const theirPRs = result.openPRs.filter((p) => lower(p.author) !== lower(me));
   const myPRs = result.openPRs.filter((p) => lower(p.author) === lower(me));
 
-  // Remote branch (best effort: a git failure never overrides what gh established).
+  // Remote branch: a git failure never overrides a taken or ours that gh established, but it turns
+  // "free" into "unknown" (the branch may hold someone's work).
   const notes = [];
   let otherAuthors = [];
   let myCommits = false;
@@ -183,11 +184,13 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
   } else if (result.remoteBranch.exists === true && !authorsKnown) {
     result.verdict = 'unknown';
     result.reason = `unknown: remote branch ${branchName} exists but its authors are unverified${tail}`;
+  } else if (result.remoteBranch.exists === null) {
+    // gh found no owner, but an unchecked remote branch may still hold someone's work: never "free".
+    result.verdict = 'unknown';
+    result.reason = `unknown: no other assignee and no open PR, but ${notes.join('; ')}`;
   } else {
     result.verdict = 'free';
-    const seen = result.remoteBranch.exists === true
-      ? `remote branch ${branchName} has no commits of its own`
-      : result.remoteBranch.exists === null ? notes[0] : 'no remote branch';
+    const seen = result.remoteBranch.exists === true ? `remote branch ${branchName} has no commits of its own` : 'no remote branch';
     result.reason = `free: no other assignee, no open PR, ${seen}`;
   }
   return result;
