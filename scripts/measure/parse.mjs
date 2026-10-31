@@ -7,13 +7,55 @@ export const PLUGIN_NAME = 'nauraiz-dev';
 export const PUSH_DISABLED = 'DISABLED-by-nauraiz-measure';
 export const PERMISSION_MODE = 'acceptEdits';
 export const DEFAULT_ALLOWED_TOOLS = [
-  'Read', 'Glob', 'Grep', 'Bash(npm *)', 'Bash(npx *)', 'Bash(node *)', 'Bash(git status*)', 'Bash(git diff*)',
+  'Read', 'Glob', 'Grep', 'Bash(npm *)', 'Bash(npx *)', 'Bash(pnpm *)', 'Bash(yarn *)', 'Bash(node *)', 'Bash(git status*)', 'Bash(git diff*)',
   'Bash(git log*)', 'Bash(git add *)', 'Bash(git commit *)', 'Bash(git branch*)', 'Bash(git switch *)',
   'Bash(git checkout *)', 'Bash(git fetch*)', 'Bash(git rev-list *)', 'Bash(git ls-remote *)', 'Bash(gh issue view *)',
   'Bash(gh pr list *)', 'Bash(gh search *)',
 ].join(' ');
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+/** input + output + cache creation + cache read tokens of one usage object (the cap's definition of "tokens"). */
+// a negative field (nonsense) counts as 0: it must never lower the count the cap is checked against
+const nonNeg = (v) => Math.max(0, num(v));
+const usageSum = (u) => nonNeg(u?.input_tokens) + nonNeg(u?.output_tokens) + nonNeg(u?.cache_creation_input_tokens) + nonNeg(u?.cache_read_input_tokens);
+
+/**
+ * An incremental token counter for the harness's token cap. `feed(chunk)` takes the next piece of the
+ * stream-json stdout (any split, even mid-line) and returns the running total. It counts the same four
+ * usage fields as `parseStream`, once per assistant message id (a repeated id replaces the earlier usage,
+ * as in parseStream), and only complete lines: a trailing fragment waits for its newline, except that a
+ * fragment which is already a complete JSON object is counted at once, so the cap trips earlier, never later.
+ */
+export function createTokenCounter() {
+  const byId = new Map();
+  let total = 0;
+  let pending = '';
+  const take = (raw) => {
+    const line = raw.trim();
+    if (!line) return true;
+    let obj;
+    try { obj = JSON.parse(line); } catch { return false; }
+    const msg = obj && typeof obj === 'object' && obj.type === 'assistant' ? obj.message : null;
+    if (msg && typeof msg === 'object' && typeof msg.id === 'string' && msg.usage && typeof msg.usage === 'object') {
+      const next = usageSum(msg.usage);
+      total += next - (byId.get(msg.id) ?? 0);
+      byId.set(msg.id, next);
+    }
+    return true;
+  };
+  return {
+    feed(chunk) {
+      pending += String(chunk ?? '');
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop();
+      for (const l of lines) take(l);
+      if (pending && take(pending)) pending = '';
+      return total;
+    },
+    total: () => total,
+  };
+}
 
 /**
  * Parse the text of a stream-json run. Invalid JSON lines and unknown line types are skipped.
@@ -100,9 +142,11 @@ export function settingsJson() {
 export function buildArgs({ arm, model, budgetUsd, pluginDir, settingsFile, allowedTools = DEFAULT_ALLOWED_TOOLS }) {
   if (arm !== 'with' && arm !== 'without') throw new Error(`arm must be "with" or "without", got ${arm}`);
   const args = [
-    '-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--max-budget-usd', String(budgetUsd),
-    '--permission-mode', PERMISSION_MODE, '--allowedTools', allowedTools,
+    '-p', '--model', model, '--output-format', 'stream-json', '--verbose',
   ];
+  // no budget (token cap only): no --max-budget-usd at all
+  if (budgetUsd !== undefined && budgetUsd !== null) args.push('--max-budget-usd', String(budgetUsd));
+  args.push('--permission-mode', PERMISSION_MODE, '--allowedTools', allowedTools);
   if (settingsFile) args.push('--settings', settingsFile);
   if (arm === 'with') args.push('--plugin-dir', pluginDir);
   return args;
@@ -111,6 +155,12 @@ export function buildArgs({ arm, model, budgetUsd, pluginDir, settingsFile, allo
 const shellQuote = (s) => (/^[\w@%+=:,./\\<>-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
 const cell = (v) => String(v).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 const list = (a) => (a.length ? a.join(', ') : 'none');
+const capsText = (maxTokens, budgetUsd) => {
+  const parts = [];
+  if (maxTokens) parts.push(` Token cap: ${maxTokens} per arm.`);
+  if (maxTokens && typeof budgetUsd === 'number') parts.push(` Budget cap: ${budgetUsd} USD per arm.`);
+  return parts.join('');
+};
 const orNa = (v, f) => (v === null || v === undefined ? 'n/a' : f(v));
 
 function gateCell(g) {
@@ -121,6 +171,7 @@ function gateCell(g) {
 }
 
 function resultCell(a) {
+  if (a.stoppedAtTokenCap && a.subtype === null) return 'FAILED: stopped at the token cap';
   if (a.timedOut) return `FAILED: killed after the ${a.timedOut} min timeout`;
   if (a.subtype === null) return 'FAILED: no result line in the stream';
   return a.subtype === 'success' && !a.isError ? 'success' : `FAILED: ${a.subtype}${a.isError ? ' (is_error)' : ''}`;
@@ -133,7 +184,7 @@ function resultCell(a) {
  * (claude's exit code). `failed` (a reason) puts a FAILED banner on top. Paths are placeholders
  * (`<plugin-dir>`, `<settings-file>`) so a report carries no local path.
  */
-export function formatReport({ date, task, prompt, model, arms, gate = {}, budgetUsd, allowedTools = DEFAULT_ALLOWED_TOOLS, failed }) {
+export function formatReport({ date, task, prompt, model, arms, gate = {}, budgetUsd, maxTokens, setup, allowedTools = DEFAULT_ALLOWED_TOOLS, failed }) {
   const rows = [
     ['result', resultCell],
     ['time', (a) => orNa(a.ms, (v) => `${(v / 1000).toFixed(1)} s`)],
@@ -143,6 +194,7 @@ export function formatReport({ date, task, prompt, model, arms, gate = {}, budge
     ['cache write tokens', (a) => a.tokens.cacheWrite],
     ['input tokens', (a) => a.tokens.input],
     ['turns', (a) => a.turns],
+    ['stopped at token cap', (a) => (a.stoppedAtTokenCap ? 'yes' : 'no')],
     ['questions (AskUserQuestion calls only)', (a) => a.questions],
     ['skills invoked', (a) => list(a.skills)],
     ['nauraiz-dev copies loaded', (a) => a.pluginCopies ?? 'n/a'],
@@ -154,7 +206,8 @@ export function formatReport({ date, task, prompt, model, arms, gate = {}, budge
   out.push(
     `# Measure: ${task}`,
     '',
-    `Date: ${date}. Model: ${model}.`,
+    `Date: ${date}. Model: ${model}.${capsText(maxTokens, budgetUsd)}`,
+    ...(setup ? ['', `Setup ('${setup.command}', run in each clone before claude; its time and output are not part of the numbers): ${setup.note}.`] : []),
     '',
     'Prompt (identical for both arms, passed on stdin):',
     '',
@@ -170,9 +223,10 @@ export function formatReport({ date, task, prompt, model, arms, gate = {}, budge
     'The questions row counts AskUserQuestion calls only: headless runs write their questions as decisions in the answer text, and those are not counted.',
     "Under `claude -p` a PreToolUse `ask` from a hook is treated as a deny: the edit is refused with the hook's reason and listed in the result's permission denials (probed on Claude Code 2.1.314).",
     'Files touched are read from each clone after the run (committed, modified and untracked, repo-relative).',
+    ...(maxTokens ? [`The token cap is enforced by the harness, not by a claude flag: it counts input, output, cache creation and cache read tokens per assistant message from the stream and kills the arm once the count reaches ${maxTokens}. A message can overshoot it, and the arm keeps its partial stream.`] : []),
   ].join(' '));
 
-  const common = { model, budgetUsd: budgetUsd ?? '<budget>', pluginDir: '<plugin-dir>', settingsFile: '<settings-file>', allowedTools };
+  const common = { model, budgetUsd: budgetUsd === null ? undefined : (budgetUsd ?? '<budget>'), pluginDir: '<plugin-dir>', settingsFile: '<settings-file>', allowedTools };
   const cmd = (arm) => `claude ${buildArgs({ arm, ...common }).map(shellQuote).join(' ')} < <prompt-file>`;
   out.push(
     '', 'Commands (each arm runs once in its own fresh clone of the same ref):', '', '```sh', cmd('with'), cmd('without'), '```',

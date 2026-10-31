@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // measure: run the same prompt twice through `claude -p`, once with this plugin and once without,
 // each in its own fresh clone, and write a markdown report plus the two raw streams.
-// One run per arm, each capped by --max-budget-usd. The runs cost money: never start one by accident.
+// One run per arm, each capped by --max-tokens (counted here from the stream) and/or --max-budget-usd.
+// The runs cost money or plan usage: never start one by accident.
 import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -10,12 +11,13 @@ import { fileURLToPath } from 'node:url';
 import { isMain } from '../lib/main.mjs';
 import { findRecordedApprovals } from '../lib/decide-edit.mjs';
 import { runGate } from '../gate/run.mjs';
-import { DEFAULT_ALLOWED_TOOLS, PUSH_DISABLED, buildArgs, formatReport, parseStream, settingsJson } from './parse.mjs';
+import { DEFAULT_ALLOWED_TOOLS, PUSH_DISABLED, buildArgs, createTokenCounter, formatReport, parseStream, settingsJson } from './parse.mjs';
 
 const ARMS = ['with', 'without'];
 const LOCAL_CONFIG_REL = '.claude/nauraiz-dev.local.json';
 const DEFAULT_PLUGIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MAX_BUDGET_WITHOUT_FLAG = 20;
+const MAX_TOKENS_WITHOUT_FLAG = 20_000_000;
 const DEFAULT_TIMEOUT_MIN = 30;
 
 const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
@@ -112,17 +114,51 @@ function killTree(child, platform) {
 }
 
 /**
- * Run one arm (prompt on stdin). Resolves { code, stdout, timedOut, spawnError }; `spawnError` is set when
- * `claude` could not be started at all (not found, not executable, spawn threw).
+ * Default setup executor: run `command` through the shell in `cwd` (the way the gate runs its commands),
+ * killed with the same tree-kill as an arm after `timeoutMs`. Resolves { code, output, timedOut }.
  */
-function runClaude({ spawn, command, args, cwd, input, timeoutMs, platform }) {
+export function shellSetupExec(command, cwd, timeoutMs, platform = process.platform) {
+  return new Promise((resolve) => {
+    let output = '';
+    let timedOut = false;
+    let done = false;
+    let timer;
+    const finish = (code) => { if (!done) { done = true; clearTimeout(timer); resolve({ code, output, timedOut }); } };
+    let child;
+    try {
+      child = nodeSpawn(command, { cwd, shell: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      output = String(e.message);
+      finish(1);
+      return;
+    }
+    timer = setTimeout(() => { timedOut = true; killTree(child, platform); }, timeoutMs);
+    const take = (chunk) => { output += chunk; };
+    child.stdout.setEncoding('utf8').on('data', take);
+    child.stderr.setEncoding('utf8').on('data', take);
+    child.on('error', (e) => { output += String(e.message); finish(1); });
+    child.on('close', (code) => finish(code ?? 1));
+  });
+}
+
+const tailLines = (text, n = 3) => String(text ?? '').split(/\r?\n/).filter((l) => l.trim()).slice(-n).join(' | ');
+
+/**
+ * Run one arm (prompt on stdin). Resolves { code, stdout, timedOut, stoppedAtTokenCap, spawnError };
+ * `spawnError` is set when `claude` could not be started at all (not found, not executable, spawn threw).
+ * With `maxTokens` the stdout is counted as it streams and the child is killed (same kill path as the
+ * timeout) once the count reaches it; the partial stdout is kept.
+ */
+function runClaude({ spawn, command, args, cwd, input, timeoutMs, platform, maxTokens, onTokenCap }) {
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let stoppedAtTokenCap = false;
     let done = false;
     let timer;
-    const finish = (r) => { if (!done) { done = true; clearTimeout(timer); resolve({ stdout, timedOut, ...r }); } };
+    const counter = maxTokens ? createTokenCounter() : null;
+    const finish = (r) => { if (!done) { done = true; clearTimeout(timer); resolve({ stdout, timedOut, stoppedAtTokenCap, ...r }); } };
     let child;
     try {
       const spec = spawnSpec(command, args, platform);
@@ -134,7 +170,16 @@ function runClaude({ spawn, command, args, cwd, input, timeoutMs, platform }) {
     timer = setTimeout(() => { timedOut = true; killTree(child, platform); }, timeoutMs);
     child.stdout?.setEncoding?.('utf8');
     child.stderr?.setEncoding?.('utf8');
-    child.stdout?.on('data', (c) => { stdout += c; });
+    child.stdout?.on('data', (c) => {
+      stdout += c;
+      if (!counter || stoppedAtTokenCap || done) return;
+      const total = counter.feed(c);
+      if (total >= maxTokens) {
+        stoppedAtTokenCap = true;
+        onTokenCap?.(total);
+        killTree(child, platform);
+      }
+    });
     child.stderr?.on('data', (c) => { stderr += c; });
     child.stdin?.on?.('error', () => {});
     child.stdin?.end?.(input);
@@ -179,30 +224,52 @@ export function scanLeaks({ files, pluginDir, tmpRoot, home = homedir() }) {
 
 /**
  * Run both arms and write `<out>`, `<out>.with.jsonl`, `<out>.without.jsonl`.
- * Refuses (before touching anything) unless `budgetUsd` is a positive number (above 20 only with
- * `allowHighBudget`). The approximate total cap is 2 x budget. `spawn` and `gateExec` are injectable so
- * tests never start `claude`. If `claude` cannot be started the run stops, the report is marked FAILED
- * and `ok` is false; an arm whose `claude` exits non-zero without a result line (and was not killed by the
- * timeout) also fails the run, but the other arm still runs. The prompt goes on stdin; both arms get a
- * --settings file switching the installed copy of this plugin off, the same permission mode and tool
- * list, and a clone that cannot push. The `with` clone always gets a local config: `localConfig`'s
- * contents, else `{ "gate": { "gate": <gate> } }`, else `{}` (guided local mode either way).
+ * Refuses (before touching anything) unless at least one cap is given: `maxTokens` (a positive integer,
+ * per arm; above 20,000,000 only with `allowHighBudget`) and/or `budgetUsd` (a positive number, per arm;
+ * above 20 only with `allowHighBudget`). Both given: both apply. The approximate totals are 2 x each cap.
+ * The token cap is enforced here: the arm's stdout is counted as it streams and the arm is killed (like
+ * the timeout) when the count reaches it; it is then marked `stoppedAtTokenCap`, keeps its partial stream
+ * and still gets the gate and a report row. `spawn`, `gateExec` and `setupExec` are injectable so tests
+ * never start `claude`. With `setup`, that command runs in each clone (after the `with` clone's local
+ * config is written) before any `claude` starts, with the `timeoutMin` timeout; a failing or timed-out
+ * setup marks the run FAILED and skips both arms, so nothing is spent. If `claude` cannot be started the
+ * run stops, the report is marked FAILED and `ok` is false; an arm whose `claude` exits non-zero without
+ * a result line (and was not killed by the timeout or the token cap) also fails the run, but the other
+ * arm still runs. The prompt goes on stdin; both arms get a --settings file switching the installed copy
+ * of this plugin off, the same permission mode and tool list, and a clone that cannot push. The `with`
+ * clone always gets a local config: `localConfig`'s contents, else `{ "gate": { "gate": <gate> } }`,
+ * else `{}` (guided local mode either way).
  */
 export async function runMeasure({
-  repo, ref, prompt, model = 'sonnet', budgetUsd, out, gate, localConfig, task, allowedTools = DEFAULT_ALLOWED_TOOLS,
+  repo, ref, prompt, model = 'sonnet', budgetUsd, maxTokens, out, gate, localConfig, task, setup, allowedTools = DEFAULT_ALLOWED_TOOLS,
   timeoutMin = DEFAULT_TIMEOUT_MIN, allowHighBudget = false,
   pluginDir = DEFAULT_PLUGIN_DIR, date = new Date().toISOString().slice(0, 10),
   spawn = nodeSpawn, gateExec, tmpRoot = tmpdir(), log = console.log, claude = resolveClaude(), platform = process.platform,
-  rm = rmSync,
+  rm = rmSync, setupExec = (command, cwd, ms) => shellSetupExec(command, cwd, ms, platform),
 }) {
-  const budget = typeof budgetUsd === 'number' ? budgetUsd : Number.NaN;
-  if (!(budget > 0) || !Number.isFinite(budget)) {
-    throw new Error('--budget <usd per arm> is required and must be greater than 0; refusing to run');
+  const hasBudget = budgetUsd !== undefined && budgetUsd !== null;
+  const hasTokens = maxTokens !== undefined && maxTokens !== null;
+  if (!hasBudget && !hasTokens) {
+    throw new Error('at least one cap is required: pass --max-tokens <tokens per arm> (subscription plans) or --budget <usd per arm> (API billing); refusing to run');
   }
-  if (budget > MAX_BUDGET_WITHOUT_FLAG && !allowHighBudget) {
-    throw new Error(`--budget ${budget} is above ${MAX_BUDGET_WITHOUT_FLAG} USD per arm; pass --allow-high-budget if that is intended`);
+  if (hasBudget) {
+    if (typeof budgetUsd !== 'number' || !(budgetUsd > 0) || !Number.isFinite(budgetUsd)) {
+      throw new Error('--budget <usd per arm> must be a number greater than 0; refusing to run');
+    }
+    if (budgetUsd > MAX_BUDGET_WITHOUT_FLAG && !allowHighBudget) {
+      throw new Error(`--budget ${budgetUsd} is above ${MAX_BUDGET_WITHOUT_FLAG} USD per arm; pass --allow-high-budget if that is intended`);
+    }
+  }
+  if (hasTokens) {
+    if (!(typeof maxTokens === 'number' && Number.isSafeInteger(maxTokens) && maxTokens > 0)) {
+      throw new Error('--max-tokens <tokens per arm> must be a positive integer; refusing to run');
+    }
+    if (maxTokens > MAX_TOKENS_WITHOUT_FLAG && !allowHighBudget) {
+      throw new Error(`--max-tokens ${maxTokens} is above ${MAX_TOKENS_WITHOUT_FLAG} per arm; pass --allow-high-budget if that is intended`);
+    }
   }
   if (!(typeof timeoutMin === 'number' && timeoutMin > 0 && Number.isFinite(timeoutMin))) throw new Error('--timeout-min must be a positive number');
+  if (setup !== undefined && (typeof setup !== 'string' || !setup.trim())) throw new Error('--setup must be a non-empty command');
   for (const [name, value] of [['--repo', repo], ['--ref', ref], ['--out', out]]) {
     if (typeof value !== 'string' || !value) throw new Error(`${name} is required`);
   }
@@ -211,8 +278,13 @@ export async function runMeasure({
   const localConfigText = localConfig ? readFileSync(localConfig, 'utf8') : JSON.stringify(gate ? { gate: { gate } } : {});
   JSON.parse(localConfigText); // refuse a broken config before spending anything
 
-  const totalCapUsd = budget * ARMS.length;
-  log(`Approximate total cap: ${totalCapUsd} USD (${ARMS.length} arms x ${budget} USD, --max-budget-usd per arm; the CLI may overshoot slightly). One run per arm.`);
+  const totalCapUsd = hasBudget ? budgetUsd * ARMS.length : null;
+  const totalCapTokens = hasTokens ? maxTokens * ARMS.length : null;
+  if (hasBudget) {
+    log(`Approximate total cap: ${totalCapUsd} USD (${ARMS.length} arms x ${budgetUsd} USD, --max-budget-usd per arm; the CLI may overshoot slightly). One run per arm.`);
+  }
+  if (hasTokens) log(`Token cap: ${maxTokens} per arm (${totalCapTokens} total)`);
+  const capsText = [hasTokens ? `${maxTokens} tokens` : null, hasBudget ? `${budgetUsd} USD` : null].filter(Boolean).join(' and ');
 
   mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
   const work = mkdtempSync(path.join(tmpRoot, 'nauraiz-measure-'));
@@ -221,8 +293,12 @@ export async function runMeasure({
   const gates = {};
   const written = [];
   const failures = [];
+  const clones = {};
+  const setupSecs = {};
+  let setupFailure = null;
   try {
     writeFileSync(settingsFile, settingsJson());
+    // prepare both clones first, so a failing setup is found before any claude run spends anything
     for (const arm of ARMS) {
       const cwd = path.join(work, arm);
       log(`[${arm}] cloning ${repo} at ${ref}`);
@@ -235,10 +311,39 @@ export async function runMeasure({
         writeFileSync(path.join(cwd, ...LOCAL_CONFIG_REL.split('/')), localConfigText);
         exclude.push(LOCAL_CONFIG_REL);
       }
+      if (setup) {
+        log(`[${arm}] setup: ${setup}`);
+        const started = Date.now();
+        let r;
+        try { r = await setupExec(setup, cwd, timeoutMin * 60_000); } catch (e) { r = { code: 1, output: String(e?.message ?? e), timedOut: false }; }
+        const secs = (Date.now() - started) / 1000;
+        if (r.timedOut || r.code !== 0) {
+          setupFailure = r.timedOut ? `timed out after ${timeoutMin} min` : `exit ${r.code ?? 'n/a'}`;
+          failures.push(r.timedOut ? `setup timed out after ${timeoutMin} min in the ${arm} clone` : `setup failed in the ${arm} clone (${setupFailure})`);
+          setupSecs[arm] = null;
+          setupSecs.failedArm = arm;
+          log(`[${arm}] ${failures.at(-1)}`);
+          const tail = tailLines(r.output);
+          if (tail) log(`[${arm}] setup output: ${tail}`);
+          break;
+        }
+        setupSecs[arm] = secs;
+        log(`[${arm}] setup ok (${secs.toFixed(1)} s)`);
+        // what the setup left behind (node_modules, a lockfile) is not the arm's work
+        exclude.push(...changedFiles(cwd, ref, []));
+      }
+      clones[arm] = { cwd, exclude };
+    }
 
-      log(`[${arm}] running claude (cap ${budget} USD, timeout ${timeoutMin} min)`);
-      const args = buildArgs({ arm, model, budgetUsd: budget, pluginDir, settingsFile, allowedTools });
-      const run = await runClaude({ spawn, command: claude, args, cwd, input: prompt, timeoutMs: timeoutMin * 60_000, platform });
+    for (const arm of failures.length ? [] : ARMS) {
+      const { cwd, exclude } = clones[arm];
+      log(`[${arm}] running claude (cap ${capsText}, timeout ${timeoutMin} min)`);
+      const args = buildArgs({ arm, model, budgetUsd: hasBudget ? budgetUsd : undefined, pluginDir, settingsFile, allowedTools });
+      const run = await runClaude({
+        spawn, command: claude, args, cwd, input: prompt, timeoutMs: timeoutMin * 60_000, platform,
+        maxTokens: hasTokens ? maxTokens : 0,
+        onTokenCap: (total) => log(`[${arm}] token cap reached (${total} of ${maxTokens}); stopping claude`),
+      });
       if (run.spawnError) {
         failures.push(`claude could not be started for the ${arm} arm (${run.spawnError})`);
         arms[arm] = { ...parseStream(''), exit: null };
@@ -252,9 +357,9 @@ export async function runMeasure({
       const files = changedFiles(cwd, ref, exclude);
       arms[arm] = {
         ...parseStream(run.stdout), exit: run.code, files, approvals: countApprovals(cwd, ref, files),
-        timedOut: run.timedOut ? timeoutMin : false,
+        timedOut: run.timedOut ? timeoutMin : false, stoppedAtTokenCap: run.stoppedAtTokenCap,
       };
-      if (run.code !== 0 && !run.timedOut && arms[arm].subtype === null) {
+      if (run.code !== 0 && !run.timedOut && !run.stoppedAtTokenCap && arms[arm].subtype === null) {
         failures.push(`the ${arm} arm: claude exited ${run.code ?? 'without a code'} with no result line`);
       }
       gates[arm] = null;
@@ -262,7 +367,7 @@ export async function runMeasure({
         const { ok, results } = await runGate({ cwd, config: { gate: { gate } }, exec: gateExec });
         gates[arm] = { ok, results };
       }
-      log(`[${arm}] done: exit ${run.code ?? 'n/a'}${run.timedOut ? ' (timed out)' : ''}, cost ${arms[arm].costUsd ?? 'n/a'} USD`);
+      log(`[${arm}] done: exit ${run.code ?? 'n/a'}${run.timedOut ? ' (timed out)' : ''}${run.stoppedAtTokenCap ? ' (stopped at the token cap)' : ''}, cost ${arms[arm].costUsd ?? 'n/a'} USD`);
     }
   } finally {
     // a locked file (Windows) must not cost the report: it is written below either way
@@ -273,10 +378,17 @@ export async function runMeasure({
   const failed = failures.length ? failures.join('; ') : null;
   for (const arm of ARMS) arms[arm] ??= { ...parseStream(''), exit: null };
 
+  let setupInfo;
+  if (setup) {
+    const note = setupFailure === null
+      ? `ok (${ARMS.map((a) => `${a} ${setupSecs[a].toFixed(1)} s`).join(', ')})`
+      : `FAILED in the ${setupSecs.failedArm} clone (${setupFailure})`;
+    setupInfo = { command: setup, note };
+  }
   const firstLine = prompt.trim().split(/\r?\n/)[0];
   const md = formatReport({
     date, task: task ?? (firstLine.length > 60 ? `${firstLine.slice(0, 57)}...` : firstLine), prompt: prompt.trim(), model,
-    arms, gate: gates, budgetUsd: budget, allowedTools, failed,
+    arms, gate: gates, budgetUsd: hasBudget ? budgetUsd : null, maxTokens: hasTokens ? maxTokens : undefined, setup: setupInfo, allowedTools, failed,
   });
   writeFileSync(out, md);
   written.unshift(out);
@@ -287,12 +399,16 @@ export async function runMeasure({
     log('WARNING: private material found in the output. Do NOT commit or publish these files before removing it:');
     for (const { file, label } of leaks) log(`WARNING:   ${file}: ${label}`);
   }
-  return { reportPath: out, totalCapUsd, arms, gates, ok: failed === null, failed, leaks };
+  return { reportPath: out, totalCapUsd, totalCapTokens, arms, gates, ok: failed === null, failed, leaks };
 }
 
 const BOOLEAN_FLAGS = new Set(['allow-high-budget']);
 
-/** Parse the CLI flags into runMeasure options. Throws on a missing required flag or unreadable prompt file. */
+/**
+ * Parse the CLI flags into runMeasure options. Throws on a missing required flag, a value flag given
+ * without a value (never silently ignored: a lost cap flag must not turn into a different cap) or an
+ * unreadable prompt file.
+ */
 export function parseCli(argv) {
   const flags = {};
   for (let i = 0; i < argv.length; i++) {
@@ -300,6 +416,7 @@ export function parseCli(argv) {
     if (!flag.startsWith('--')) continue;
     const name = flag.slice(2);
     flags[name] = BOOLEAN_FLAGS.has(name) ? true : inline !== undefined ? inline : argv[++i];
+    if (flags[name] === undefined) throw new Error(`--${name} needs a value`);
   }
   for (const name of ['repo', 'ref', 'prompt-file', 'out']) {
     if (!flags[name]) throw new Error(`--${name} is required`);
@@ -314,10 +431,12 @@ export function parseCli(argv) {
     prompt,
     model: flags.model ?? 'sonnet',
     budgetUsd: flags.budget === undefined ? undefined : Number(flags.budget),
+    maxTokens: flags['max-tokens'] === undefined ? undefined : Number(flags['max-tokens']),
     out: flags.out,
     gate: flags.gate,
     localConfig: flags['local-config'],
     task: flags.task,
+    setup: flags.setup,
     allowHighBudget: flags['allow-high-budget'] === true,
   };
   if (flags['allowed-tools']) opts.allowedTools = flags['allowed-tools'];
@@ -335,6 +454,6 @@ if (isMain(import.meta.url)) {
     if (!r.ok) { console.error(`nauraiz-dev: FAILED: ${r.failed}`); process.exit(1); }
   }).catch((e) => {
     console.error(`nauraiz-dev: ${e.message}`);
-    process.exit(/--budget|--timeout-min/.test(e.message) ? 2 : 1);
+    process.exit(/--budget|--timeout-min|--max-tokens|--setup|--allow-high-budget|at least one cap/.test(e.message) ? 2 : 1);
   });
 }

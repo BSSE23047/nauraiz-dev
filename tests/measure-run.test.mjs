@@ -41,7 +41,7 @@ function makeBare(root) {
  * text/code (the reply), onRun(cwd, callIndex) (mutate the clone like a working agent), throwErr (spawn
  * throws), errorEvent (emit 'error' like ENOENT), hang (never closes until killed).
  */
-function fakeSpawn(calls, { text = stream, code = 0, onRun, throwErr, errorEvent, hang } = {}) {
+function fakeSpawn(calls, { text = stream, code = 0, onRun, throwErr, errorEvent, hang, chunks, events } = {}) {
   return (cmd, args, opts) => {
     if (throwErr) throw new Error(throwErr);
     const i = calls.length;
@@ -56,14 +56,17 @@ function fakeSpawn(calls, { text = stream, code = 0, onRun, throwErr, errorEvent
       localConfig: existsSync(path.join(opts.cwd, '.claude', 'nauraiz-dev.local.json'))
         ? readFileSync(path.join(opts.cwd, '.claude', 'nauraiz-dev.local.json'), 'utf8') : null,
     };
+    call.killed = 0;
     calls.push(call);
+    events?.push('spawn');
     onRun?.(opts.cwd, i);
     const child = new EventEmitter();
     child.stdin = new Writable({ write(chunk, enc, cb) { call.stdin += chunk; cb(); } });
-    child.stdout = Readable.from([text]);
+    child.stdout = Readable.from(chunks ?? [text]);
     child.stderr = Readable.from(['']);
-    child.kill = () => { setImmediate(() => child.emit('close', null)); };
+    child.kill = () => { call.killed++; setImmediate(() => child.emit('close', null)); };
     if (errorEvent) setImmediate(() => child.emit('error', new Error(errorEvent)));
+    else if (chunks) child.stdout.on('end', () => setImmediate(() => child.emit('close', code)));
     else if (!hang) setImmediate(() => setImmediate(() => child.emit('close', code)));
     return child;
   };
@@ -335,6 +338,8 @@ test('parseCli: reads every flag, requires the inputs, never defaults the budget
     assert.equal(o.allowHighBudget, true);
     const bare = parseCli(['--repo', 'r', '--ref', 'abc', '--prompt-file', pf, '--out', 'o.md']);
     assert.equal(bare.budgetUsd, undefined);
+    assert.equal(bare.maxTokens, undefined);
+    assert.equal(bare.setup, undefined);
     assert.equal(bare.model, 'sonnet');
     assert.equal(bare.allowHighBudget, false);
     assert.equal('allowedTools' in bare, false);
@@ -422,4 +427,205 @@ test('runMeasure: a failure to delete the temp clones never loses the report', a
   } finally {
     cleanup(root);
   }
+});
+
+const assistantLine = (id, tokens) => JSON.stringify({ type: 'assistant', message: { id, usage: { input_tokens: 0, output_tokens: tokens }, content: [] } }) + '\n';
+
+async function runWith(extra = {}, spawnOpts = {}) {
+  const root = sandbox();
+  const tmp = path.join(root, 'tmp');
+  try {
+    const { bare, first } = makeBare(root);
+    mkdirSync(tmp);
+    const calls = [];
+    const logs = [];
+    const out = path.join(root, 'r.md');
+    const gateCalls = [];
+    const res = await runMeasure({
+      repo: bare, ref: first, prompt: 'p', model: 'sonnet', out, pluginDir: '/p', date: 'd', task: 't', tmpRoot: tmp,
+      log: (l) => logs.push(l), spawn: fakeSpawn(calls, spawnOpts),
+      gateExec: async (command, cwd) => { gateCalls.push(cwd); return { code: 0, output: '' }; },
+      ...extra,
+    });
+    return {
+      res, calls, logs, gateCalls, md: readFileSync(out, 'utf8'), out, tmpLeft: readdirSync(tmp),
+      withStream: existsSync(`${out}.with.jsonl`) ? readFileSync(`${out}.with.jsonl`, 'utf8') : null,
+    };
+  } finally {
+    cleanup(root);
+  }
+}
+
+test('runMeasure: an arm whose streamed usage reaches --max-tokens is killed, marked, keeps its partial stream and still gets the gate and a report', async () => {
+  const chunks = [assistantLine('m1', 40), assistantLine('m1', 40), assistantLine('m2', 70), assistantLine('m3', 5000)];
+  const r = await runWith({ maxTokens: 100, gate: 'true' }, { chunks });
+  assert.equal(r.res.ok, true);
+  assert.deepEqual(r.calls.map((c) => c.killed), [1, 1], 'each arm was killed exactly once');
+  assert.equal(r.res.arms.with.stoppedAtTokenCap, true);
+  assert.equal(r.res.arms.without.stoppedAtTokenCap, true);
+  assert.equal(r.gateCalls.length, 2, 'the gate still ran in both clones');
+  assert.ok(r.md.includes('| stopped at token cap | yes | yes |'), r.md);
+  assert.ok(r.md.includes('| result | FAILED: stopped at the token cap | FAILED: stopped at the token cap |'), r.md);
+  assert.ok(r.md.includes('| gate | pass | pass |'));
+  assert.match(r.md, /Token cap: 100 per arm\./);
+  assert.equal(r.logs.find((l) => l.startsWith('Token cap')), 'Token cap: 100 per arm (200 total)');
+  assert.ok(!r.logs.some((l) => l.startsWith('Approximate total cap')), 'no USD line without a budget');
+  assert.equal(r.res.totalCapTokens, 200);
+  assert.ok(r.withStream.startsWith(chunks[0]), 'the partial stream is kept');
+  assert.deepEqual(r.tmpLeft, []);
+});
+
+test('runMeasure: an arm that stays under --max-tokens is not killed and the row says no', async () => {
+  const r = await runWith({ maxTokens: 1_000_000 });
+  assert.deepEqual(r.calls.map((c) => c.killed), [0, 0]);
+  assert.ok(r.md.includes('| stopped at token cap | no | no |'));
+  assert.equal(r.res.arms.with.stoppedAtTokenCap, false);
+});
+
+test('runMeasure: a cap hit by a line that arrives without its newline still kills the arm', async () => {
+  const r = await runWith({ maxTokens: 10 }, { chunks: [assistantLine('m1', 10).trimEnd()] });
+  assert.deepEqual(r.calls.map((c) => c.killed), [1, 1]);
+});
+
+test('runMeasure: --max-tokens only passes no --max-budget-usd; --budget only still works; both apply together', async () => {
+  const tokensOnly = await runWith({ maxTokens: 500 });
+  for (const c of tokensOnly.calls) assert.ok(!c.args.includes('--max-budget-usd'));
+  assert.ok(!tokensOnly.md.includes('--max-budget-usd'));
+  assert.equal(tokensOnly.res.totalCapUsd, null);
+
+  const budgetOnly = await runWith({ budgetUsd: 3 });
+  for (const c of budgetOnly.calls) assert.equal(c.args[c.args.indexOf('--max-budget-usd') + 1], '3');
+  assert.match(budgetOnly.logs[0], /^Approximate total cap: 6 USD/);
+  assert.ok(!budgetOnly.logs.some((l) => l.startsWith('Token cap')));
+  assert.equal(budgetOnly.res.totalCapTokens, null);
+
+  const both = await runWith({ budgetUsd: 3, maxTokens: 500 });
+  for (const c of both.calls) assert.equal(c.args[c.args.indexOf('--max-budget-usd') + 1], '3');
+  assert.match(both.logs[0], /^Approximate total cap: 6 USD/);
+  assert.ok(both.logs.includes('Token cap: 500 per arm (1000 total)'));
+  assert.match(both.md, /Token cap: 500 per arm\. Budget cap: 3 USD per arm\./);
+});
+
+test('runMeasure: refuses with neither cap, or a bad --max-tokens, before cloning anything', async () => {
+  const root = sandbox();
+  try {
+    const calls = [];
+    const base = { repo: root, ref: 'x', prompt: 'p', model: 'sonnet', out: path.join(root, 'r.md'), spawn: fakeSpawn(calls), tmpRoot: root, log() {} };
+    await assert.rejects(runMeasure({ ...base }), /at least one cap.*--max-tokens.*--budget/);
+    await assert.rejects(runMeasure({ ...base, budgetUsd: undefined, maxTokens: undefined }), /at least one cap/);
+    for (const maxTokens of [0, -5, 1.5, 'abc', Number.NaN, '100', Infinity]) await assert.rejects(runMeasure({ ...base, maxTokens }), /--max-tokens/, String(maxTokens));
+    await assert.rejects(runMeasure({ ...base, maxTokens: 20_000_001 }), /--allow-high-budget/);
+    await assert.rejects(runMeasure({ ...base, maxTokens: 500, budgetUsd: 0 }), /--budget/, 'a bad budget is refused even when a token cap is given');
+    await assert.rejects(runMeasure({ ...base, maxTokens: 500, budgetUsd: 21 }), /--allow-high-budget/);
+    assert.equal(calls.length, 0);
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('runMeasure: above 20,000,000 tokens runs only with allowHighBudget; exactly 20,000,000 needs no flag', async () => {
+  const high = await runWith({ maxTokens: 20_000_001, allowHighBudget: true });
+  assert.equal(high.res.ok, true);
+  const edge = await runWith({ maxTokens: 20_000_000 });
+  assert.equal(edge.res.ok, true);
+});
+
+test('parseCli: --max-tokens and --setup are read; a flag given without a value is refused rather than ignored', () => {
+  const root = sandbox();
+  try {
+    const pf = path.join(root, 'prompt.txt');
+    writeFileSync(pf, 'p');
+    const need = ['--repo', 'r', '--ref', 'abc', '--prompt-file', pf, '--out', 'o.md'];
+    const o = parseCli([...need, '--max-tokens', '2000000', '--setup', 'npm ci']);
+    assert.equal(o.maxTokens, 2000000);
+    assert.equal(o.budgetUsd, undefined);
+    assert.equal(o.setup, 'npm ci');
+    assert.equal(parseCli([...need, '--max-tokens=15']).maxTokens, 15);
+    assert.ok(Number.isNaN(parseCli([...need, '--max-tokens', 'abc']).maxTokens), 'garbage stays NaN so runMeasure refuses it');
+    assert.equal(parseCli([...need, '--max-tokens', '1.5']).maxTokens, 1.5);
+    assert.throws(() => parseCli([...need, '--budget', '3', '--max-tokens']), /--max-tokens needs a value/);
+    assert.throws(() => parseCli([...need, '--max-tokens', '5', '--budget']), /--budget needs a value/);
+    assert.throws(() => parseCli([...need, '--setup']), /--setup needs a value/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+function setupSeam(events, { code = 0, output = '', timedOut = false, delayMs = 0, perCwd } = {}) {
+  const seen = [];
+  const fn = async (command, cwd, timeoutMs) => {
+    events.push('setup');
+    seen.push({ command, cwd, timeoutMs, localConfig: existsSync(path.join(cwd, '.claude', 'nauraiz-dev.local.json')) });
+    perCwd?.(cwd, seen.length - 1);
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+    const exit = typeof code === 'function' ? code(seen.length - 1) : code;
+    return { code: exit, output, timedOut };
+  };
+  fn.seen = seen;
+  return fn;
+}
+
+test('--setup: runs once per clone, after the local config is written and before any claude spawn; its time is not the arm time', async () => {
+  const events = [];
+  const setupExec = setupSeam(events, {
+    delayMs: 40, output: 'installed',
+    perCwd: (cwd) => { mkdirSync(path.join(cwd, 'node_modules')); writeFileSync(path.join(cwd, 'node_modules', 'x.js'), '1'); },
+  });
+  const r = await runWith({ budgetUsd: 1, setup: 'npm ci', setupExec, timeoutMin: 7 }, { events });
+  assert.deepEqual(events, ['setup', 'setup', 'spawn', 'spawn'], 'both clones are prepared before any money is spent');
+  assert.equal(setupExec.seen.length, 2);
+  assert.deepEqual(setupExec.seen.map((s) => s.command), ['npm ci', 'npm ci']);
+  assert.deepEqual(setupExec.seen.map((s) => s.cwd), r.calls.map((c) => c.opts.cwd));
+  assert.deepEqual(setupExec.seen.map((s) => s.timeoutMs), [420000, 420000], '--timeout-min is reused');
+  assert.equal(setupExec.seen[0].localConfig, true, 'the with clone already has its local config');
+  assert.equal(r.res.ok, true);
+  assert.ok(r.md.includes('| time | 61.0 s | 61.0 s |'), 'arm time comes from the stream, not the wall clock');
+  assert.match(r.md, /Setup \('npm ci', run in each clone before claude; its time and output are not part of the numbers\): ok \(with \d+\.\d s, without \d+\.\d s\)\./);
+  assert.ok(r.md.includes('| files touched | none | none |'), 'files the setup created (node_modules) are not the arm work');
+});
+
+test('--setup: a failing setup marks the run FAILED, skips both arms (no claude, no gate) and cleans up', async () => {
+  for (const failAt of [0, 1]) {
+    const events = [];
+    const setupExec = setupSeam(events, { code: (i) => (i === failAt ? 3 : 0), output: 'boom line' });
+    const r = await runWith({ budgetUsd: 1, setup: 'npm ci', setupExec, gate: 'true' }, { events });
+    assert.equal(r.res.ok, false, String(failAt));
+    assert.equal(r.calls.length, 0, 'claude never started, nothing spent');
+    assert.equal(r.gateCalls.length, 0);
+    assert.match(r.res.failed, new RegExp(`setup failed in the ${failAt === 0 ? 'with' : 'without'} clone \\(exit 3\\)`));
+    assert.ok(r.md.startsWith('**FAILED: setup failed'), r.md.slice(0, 120));
+    assert.match(r.md, /: FAILED in the (with|without) clone/, 'the setup status is in the header');
+    assert.ok(r.logs.some((l) => l.includes('boom line')), 'the tail of the setup output is logged');
+    assert.deepEqual(r.tmpLeft, []);
+    assert.equal(events.filter((e) => e === 'spawn').length, 0);
+  }
+});
+
+test('--setup: a setup that times out is a failure', async () => {
+  const r = await runWith({ budgetUsd: 1, setup: 'sleep', setupExec: setupSeam([], { code: 1, timedOut: true }), timeoutMin: 2 });
+  assert.equal(r.res.ok, false);
+  assert.match(r.res.failed, /setup timed out after 2 min in the with clone/);
+  assert.equal(r.calls.length, 0);
+});
+
+test('--setup: the default executor runs the command through the shell in the clone, and kills it on timeout', async () => {
+  const ok = await runWith({ budgetUsd: 1, setup: 'node -e "require(\'fs\').writeFileSync(\'setup-ran.txt\', \'x\')"' });
+  assert.equal(ok.res.ok, true, ok.res.failed ?? '');
+  assert.ok(ok.calls.every((c) => c.cwdFiles.includes('setup-ran.txt')), 'the file the setup wrote was there when claude started');
+  assert.ok(ok.md.includes('| files touched | none | none |'));
+
+  const slow = await runWith({ budgetUsd: 1, setup: 'node -e "setTimeout(() => {}, 60000)"', timeoutMin: 0.004 });
+  assert.equal(slow.res.ok, false);
+  assert.match(slow.res.failed, /setup timed out/);
+  assert.equal(slow.calls.length, 0);
+});
+
+test('--setup: absent, nothing is run and the report has no setup line; a blank setup is refused', async () => {
+  const events = [];
+  const setupExec = setupSeam(events);
+  const r = await runWith({ budgetUsd: 1, setupExec }, { events });
+  assert.equal(setupExec.seen.length, 0);
+  assert.ok(!r.md.includes('Setup ('));
+  await assert.rejects(runWith({ budgetUsd: 1, setup: '   ' }), /--setup/);
 });

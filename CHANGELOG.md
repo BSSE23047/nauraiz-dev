@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — 2026-10-31
+
+- measure: `--max-tokens` per-arm token cap for subscription plans; `--budget` is optional when it is set (at least one cap is required; both can be given). The harness counts input, output, cache creation and cache read tokens from the stream and kills the arm at the cap; the report gets a `stopped at token cap` row and the cap in the header.
+- measure: `--setup "<cmd>"` runs once in each clone before `claude` starts (its time and output are not part of the arm's numbers); a failing setup marks the run FAILED and skips both arms.
+- measure: `pnpm` and `yarn` are in the default allowed tools next to `npm` and `npx`.
+
 ## 0.2.0 — 2026-10-31
 
 Skill-listing cost: about 937 tokens always-on for all 13 skills and both agents together, measured with `claude plugin details` on this branch (budget 1,500).

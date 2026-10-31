@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseStream, buildArgs, formatReport, settingsJson, DEFAULT_ALLOWED_TOOLS } from '../scripts/measure/parse.mjs';
+import { parseStream, buildArgs, formatReport, settingsJson, createTokenCounter, DEFAULT_ALLOWED_TOOLS } from '../scripts/measure/parse.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const stream = readFileSync(path.join(here, 'fixtures', 'measure', 'stream.jsonl'), 'utf8');
@@ -55,7 +55,7 @@ test('buildArgs: prompt not in argv, shared safety flags, settings file for both
 
 test('default allowed tools: the owner-ruled list, read-only gh, no push', () => {
   const tools = DEFAULT_ALLOWED_TOOLS;
-  for (const t of ['Read', 'Glob', 'Grep', 'Bash(npm *)', 'Bash(git commit *)', 'Bash(gh issue view *)', 'Bash(gh search *)']) assert.ok(tools.includes(t), t);
+  for (const t of ['Read', 'Glob', 'Grep', 'Bash(npm *)', 'Bash(git commit *)', 'Bash(pnpm *)', 'Bash(yarn *)', 'Bash(gh issue view *)', 'Bash(gh search *)']) assert.ok(tools.includes(t), t);
   assert.doesNotMatch(tools, /git push|gh pr create|gh api|Write|Edit/);
 });
 
@@ -123,9 +123,75 @@ test('measure skill: owner-only, short description, confirms budget and total ca
   assert.match(fm, /^disable-model-invocation: true$/m);
   const desc = /^description: "(.*)"$/m.exec(fm)[1];
   assert.ok(desc.length <= 200, `description is ${desc.length} chars`);
-  for (const needle of ['approximate total cap', '2 x budget', 'WARNING:', 'docs/measure/*.jsonl', '--allow-high-budget', '--timeout-min', 'sonnet', '3 USD', 'Work on issue #N on branch B.',
+  for (const needle of ['approximate total cap', '2 x budget', 'WARNING:', 'docs/measure/*.jsonl', '--allow-high-budget', '--timeout-min', '--setup', 'sonnet', '3 USD', 'Work on issue #N on branch B.',
     'counts AskUserQuestion calls only', 'a PreToolUse `ask` becomes a deny', 'Only the disabled push URL is enforced', '`{ "gate": { "gate": "<cmd>" } }`',
     'no result line']) {
     assert.ok(text.includes(needle), `skill must mention ${needle}`);
   }
+});
+
+const usageLine = (id, u, extra = {}) => JSON.stringify({ type: 'assistant', message: { id, usage: u, content: [], ...extra } });
+
+test('createTokenCounter: sums input, output, cache creation and cache read, once per assistant message id', () => {
+  const c = createTokenCounter();
+  assert.equal(c.total(), 0);
+  const m1 = usageLine('m1', { input_tokens: 1, output_tokens: 20, cache_creation_input_tokens: 300, cache_read_input_tokens: 4000 });
+  assert.equal(c.feed(`${m1}\n`), 4321);
+  assert.equal(c.feed(`${m1}\n${m1}\n`), 4321, 'a repeated message id is not counted again');
+  assert.equal(c.feed(`${usageLine('m2', { input_tokens: 9, output_tokens: 1 })}\n`), 4331);
+  assert.equal(c.total(), 4331);
+});
+
+test('createTokenCounter: a later line for the same id replaces the earlier usage (the same rule as parseStream)', () => {
+  const c = createTokenCounter();
+  c.feed(`${usageLine('m1', { output_tokens: 5 })}\n`);
+  assert.equal(c.feed(`${usageLine('m1', { output_tokens: 50 })}\n`), 50);
+});
+
+test('createTokenCounter: lines split across chunks, bad lines, non-assistant lines and missing usage are tolerated', () => {
+  const c = createTokenCounter();
+  const line = usageLine('m1', { input_tokens: 7, output_tokens: 3 });
+  assert.equal(c.feed(line.slice(0, 30)), 0, 'half a line counts nothing yet');
+  assert.equal(c.feed(`${line.slice(30)}\nnot json\n{"type":"result","usage":{"output_tokens":999}}\n{"type":"user"}\n`), 10);
+  assert.equal(c.feed(usageLine('m2', undefined)), 10, 'no usage object counts nothing');
+  assert.equal(c.feed('\n'), 10);
+  const noNewline = createTokenCounter();
+  assert.equal(noNewline.feed(line), 10, 'a complete JSON line without its newline is counted now (stops earlier, never later)');
+  assert.equal(noNewline.feed('\n'), 10);
+  const junk = createTokenCounter();
+  assert.equal(junk.feed(usageLine('m', { output_tokens: 'x', input_tokens: -1 })), 0);
+});
+
+test('createTokenCounter: agrees with parseStream on the fixture stream', () => {
+  const c = createTokenCounter();
+  const t = parseStream(stream).tokens;
+  assert.equal(c.feed(stream), t.output + t.cacheRead + t.cacheWrite + t.input);
+});
+
+test('buildArgs: --max-budget-usd is left out when there is no budget (token cap only)', () => {
+  const args = buildArgs({ arm: 'with', model: 'sonnet', pluginDir: '/p', settingsFile: '/s' });
+  assert.ok(!args.includes('--max-budget-usd'));
+  assert.deepEqual(args.slice(0, 6), ['-p', '--model', 'sonnet', '--output-format', 'stream-json', '--verbose']);
+});
+
+test('formatReport: the token cap in the header, a stopped-at-token-cap row, no --max-budget-usd without a budget', () => {
+  const capped = fullArm({ stoppedAtTokenCap: true, subtype: null });
+  const ok = fullArm();
+  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: capped, without: ok }, maxTokens: 2000000, budgetUsd: null });
+  assert.match(md, /^Date: d\. Model: m\. Token cap: 2000000 per arm\.$/m);
+  assert.ok(md.includes('| stopped at token cap | yes | no |'), md);
+  assert.ok(md.includes('| result | FAILED: stopped at the token cap | success |'), md);
+  assert.ok(!md.includes('--max-budget-usd'));
+  assert.ok(!md.includes('<budget>'));
+  const both = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: ok, without: ok }, maxTokens: 500, budgetUsd: 3 });
+  assert.match(both, /Token cap: 500 per arm\. Budget cap: 3 USD per arm\./);
+  assert.match(both, /--max-budget-usd 3/);
+  const none = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: ok, without: ok }, budgetUsd: 3 });
+  assert.ok(none.includes('| stopped at token cap | no | no |'));
+  assert.ok(!none.includes('Token cap:'), 'no token cap line when none is set');
+});
+
+test('measure skill: explains both caps, the 2,000,000 token default and confirms whichever caps apply', () => {
+  const text = readFileSync(path.join(here, '..', 'skills', 'measure', 'SKILL.md'), 'utf8');
+  for (const needle of ['--max-tokens', '2,000,000', '--budget', 'subscription', 'API billing']) assert.ok(text.includes(needle), `skill must mention ${needle}`);
 });
