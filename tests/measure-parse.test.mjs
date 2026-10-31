@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseStream, buildArgs, formatReport, settingsJson, createTokenCounter, DEFAULT_ALLOWED_TOOLS } from '../scripts/measure/parse.mjs';
+import { parseStream, buildArgs, formatReport, settingsJson, createTokenCounter, tokenCapNotEnforced, totalTokens, DEFAULT_ALLOWED_TOOLS } from '../scripts/measure/parse.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const stream = readFileSync(path.join(here, 'fixtures', 'measure', 'stream.jsonl'), 'utf8');
@@ -194,4 +194,38 @@ test('formatReport: the token cap in the header, a stopped-at-token-cap row, no 
 test('measure skill: explains both caps, the 2,000,000 token default and confirms whichever caps apply', () => {
   const text = readFileSync(path.join(here, '..', 'skills', 'measure', 'SKILL.md'), 'utf8');
   for (const needle of ['--max-tokens', '2,000,000', '--budget', 'subscription', 'API billing']) assert.ok(text.includes(needle), `skill must mention ${needle}`);
+});
+
+test('formatReport: no --max-budget-usd in the commands without a budget (undefined or null), no <budget> placeholder', () => {
+  const ok = fullArm();
+  for (const budgetUsd of [undefined, null]) {
+    const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: ok, without: ok }, budgetUsd, maxTokens: 1000 });
+    assert.ok(!md.includes('--max-budget-usd'), String(budgetUsd));
+    assert.ok(!md.includes('<budget>'));
+  }
+});
+
+test('tokenCapNotEnforced / formatReport: a finished stream that counts the cap without a stop gets a WARNING banner', () => {
+  const arm = fullArm(); // 18 + 150 + 4500 + 300 = 4968 tokens
+  assert.equal(totalTokens(arm), 4968);
+  assert.equal(tokenCapNotEnforced(arm, 4968), true);
+  assert.equal(tokenCapNotEnforced(arm, 4969), false);
+  assert.equal(tokenCapNotEnforced({ ...arm, stoppedAtTokenCap: true }, 100), false, 'a stopped arm is not a surprise');
+  assert.equal(tokenCapNotEnforced(arm, undefined), false);
+  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: arm, without: arm }, maxTokens: 100, warnings: ['the with arm: token cap reached but the arm was not stopped (4968 tokens counted, cap 100)'] });
+  assert.ok(md.startsWith('**WARNING: the with arm: token cap reached but the arm was not stopped'), md.slice(0, 120));
+});
+
+test('formatReport: with --setup the safety paragraph and notes say the setup is outside the allowed-tools list', () => {
+  const ok = fullArm();
+  const md = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: ok, without: ok }, budgetUsd: 3, setup: { command: 'npm ci', note: 'ok (with 1.0 s, without 1.0 s)' } });
+  assert.ok(md.includes('outside the allowed-tools list (package lifecycle scripts run), and is killed after --timeout-min'));
+  assert.ok(md.includes('an arm edit to a file the setup also changed is not listed either'));
+  const none = formatReport({ date: 'd', task: 't', prompt: 'p', model: 'm', arms: { with: ok, without: ok }, budgetUsd: 3 });
+  assert.ok(!none.includes('--setup command runs'));
+});
+
+test('measure skill: the run line has optional caps, a capped arm is called partial, and the setup limits are stated', () => {
+  const text = readFileSync(path.join(here, '..', 'skills', 'measure', 'SKILL.md'), 'utf8');
+  for (const needle of ['[--max-tokens <n>] [--budget <usd>]', 'is partial', 'outside the allowed-tools list', 'killed after `--timeout-min`']) assert.ok(text.includes(needle), needle);
 });

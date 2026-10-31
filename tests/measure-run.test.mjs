@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, 
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runMeasure, parseCli, resolveClaude, spawnSpec, scanLeaks } from '../scripts/measure/run.mjs';
+import { runMeasure, parseCli, resolveClaude, spawnSpec, scanLeaks, shellSetupExec, exitCodeFor, UsageError } from '../scripts/measure/run.mjs';
 import { settingsJson } from '../scripts/measure/parse.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -39,9 +39,10 @@ function makeBare(root) {
 /**
  * A fake child_process.spawn. Records each call plus a snapshot of the clone at spawn time. Options:
  * text/code (the reply), onRun(cwd, callIndex) (mutate the clone like a working agent), throwErr (spawn
- * throws), errorEvent (emit 'error' like ENOENT), hang (never closes until killed).
+ * throws), errorEvent (emit 'error' like ENOENT), hang (never closes until killed), chunks (stdout one
+ * chunk per tick, cut once killed), pid (give the child a pid, so the harness takes the tree-kill path).
  */
-function fakeSpawn(calls, { text = stream, code = 0, onRun, throwErr, errorEvent, hang, chunks, events } = {}) {
+function fakeSpawn(calls, { text = stream, code = 0, onRun, throwErr, errorEvent, hang, chunks, events, pid } = {}) {
   return (cmd, args, opts) => {
     if (throwErr) throw new Error(throwErr);
     const i = calls.length;
@@ -61,8 +62,21 @@ function fakeSpawn(calls, { text = stream, code = 0, onRun, throwErr, errorEvent
     events?.push('spawn');
     onRun?.(opts.cwd, i);
     const child = new EventEmitter();
+    if (pid) child.pid = pid;
     child.stdin = new Writable({ write(chunk, enc, cb) { call.stdin += chunk; cb(); } });
-    child.stdout = Readable.from(chunks ?? [text]);
+    if (chunks) {
+      // one chunk per tick; nothing more once the harness has killed the child (a cut stream)
+      const queue = [...chunks];
+      const r = new Readable({ read() {} });
+      const pump = () => {
+        if (call.killed > 0) return;
+        if (queue.length === 0) { r.push(null); return; }
+        r.push(queue.shift());
+        setImmediate(pump);
+      };
+      setImmediate(pump);
+      child.stdout = r;
+    } else child.stdout = Readable.from([text]);
     child.stderr = Readable.from(['']);
     child.kill = () => { call.killed++; setImmediate(() => child.emit('close', null)); };
     if (errorEvent) setImmediate(() => child.emit('error', new Error(errorEvent)));
@@ -448,7 +462,7 @@ async function runWith(extra = {}, spawnOpts = {}) {
       ...extra,
     });
     return {
-      res, calls, logs, gateCalls, md: readFileSync(out, 'utf8'), out, tmpLeft: readdirSync(tmp),
+      res, calls, logs, gateCalls, md: readFileSync(out, 'utf8'), out, tmp, bare, tmpLeft: readdirSync(tmp),
       withStream: existsSync(`${out}.with.jsonl`) ? readFileSync(`${out}.with.jsonl`, 'utf8') : null,
     };
   } finally {
@@ -457,7 +471,9 @@ async function runWith(extra = {}, spawnOpts = {}) {
 }
 
 test('runMeasure: an arm whose streamed usage reaches --max-tokens is killed, marked, keeps its partial stream and still gets the gate and a report', async () => {
-  const chunks = [assistantLine('m1', 40), assistantLine('m1', 40), assistantLine('m2', 70), assistantLine('m3', 5000)];
+  // m1 counts 60 once (a repeat of the same id must not count again): 60 < 100, so no kill at either m1 line;
+  // m2 brings the count to 110 and that is where the stream is cut (m3 never reaches the file)
+  const chunks = [assistantLine('m1', 60), assistantLine('m1', 60), assistantLine('m2', 50), assistantLine('m3', 5000)];
   const r = await runWith({ maxTokens: 100, gate: 'true' }, { chunks });
   assert.equal(r.res.ok, true);
   assert.deepEqual(r.calls.map((c) => c.killed), [1, 1], 'each arm was killed exactly once');
@@ -471,7 +487,7 @@ test('runMeasure: an arm whose streamed usage reaches --max-tokens is killed, ma
   assert.equal(r.logs.find((l) => l.startsWith('Token cap')), 'Token cap: 100 per arm (200 total)');
   assert.ok(!r.logs.some((l) => l.startsWith('Approximate total cap')), 'no USD line without a budget');
   assert.equal(r.res.totalCapTokens, 200);
-  assert.ok(r.withStream.startsWith(chunks[0]), 'the partial stream is kept');
+  assert.equal(r.withStream, chunks.slice(0, 3).join(''), 'the partial stream is kept and cut right after the line that reached the cap');
   assert.deepEqual(r.tmpLeft, []);
 });
 
@@ -609,7 +625,7 @@ test('--setup: a setup that times out is a failure', async () => {
   assert.equal(r.calls.length, 0);
 });
 
-test('--setup: the default executor runs the command through the shell in the clone, and kills it on timeout', async () => {
+test('--setup: the default executor runs the command through the shell in the clone, and kills it on timeout', { timeout: 30_000 }, async () => {
   const ok = await runWith({ budgetUsd: 1, setup: 'node -e "require(\'fs\').writeFileSync(\'setup-ran.txt\', \'x\')"' });
   assert.equal(ok.res.ok, true, ok.res.failed ?? '');
   assert.ok(ok.calls.every((c) => c.cwdFiles.includes('setup-ran.txt')), 'the file the setup wrote was there when claude started');
@@ -628,4 +644,82 @@ test('--setup: absent, nothing is run and the report has no setup line; a blank 
   assert.equal(setupExec.seen.length, 0);
   assert.ok(!r.md.includes('Setup ('));
   await assert.rejects(runWith({ budgetUsd: 1, setup: '   ' }), /--setup/);
+});
+
+test('--setup: a setupExec that rejects fails closed (setup failed, no claude, no gate)', async () => {
+  const r = await runWith({ budgetUsd: 1, setup: 'npm ci', gate: 'true', setupExec: async () => { throw new Error('kaboom'); } });
+  assert.equal(r.res.ok, false);
+  assert.match(r.res.failed, /setup failed in the with clone \(exit 1\)/);
+  assert.equal(r.calls.length, 0);
+  assert.equal(r.gateCalls.length, 0);
+  assert.ok(r.logs.some((l) => l.includes('kaboom')));
+});
+
+test('--setup: the setup always runs inside the temp clones, never in the source repo', async () => {
+  const setupExec = setupSeam([]);
+  const r = await runWith({ budgetUsd: 1, setup: 'npm ci', setupExec });
+  assert.equal(setupExec.seen.length, 2);
+  for (const { cwd } of setupExec.seen) {
+    assert.ok(path.resolve(cwd).startsWith(path.resolve(r.tmp) + path.sep), `${cwd} is under the temp root`);
+    assert.notEqual(path.resolve(cwd), path.resolve(r.bare));
+  }
+  assert.ok(r.md.includes('Files the setup created or changed are not listed under files touched'));
+  assert.match(r.md, /The --setup command runs in each clone with the full environment, outside the allowed-tools list \(package lifecycle scripts run\), and is killed after --timeout-min/);
+});
+
+test('shellSetupExec: a compound command whose grandchild outlives the kill still resolves as timed out (POSIX)', { skip: process.platform === 'win32', timeout: 15_000 }, async () => {
+  const root = sandbox();
+  try {
+    const started = Date.now();
+    const r = await shellSetupExec('sh -c "node -e \'setTimeout(()=>{},60000)\'; true"', root, 300);
+    assert.equal(r.timedOut, true);
+    assert.equal(r.code, 1);
+    assert.ok(Date.now() - started < 10_000, 'resolved from the timer, not when the grandchild finally exits');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('exitCodeFor: argument refusals are 2, anything else is 1', async () => {
+  assert.equal(exitCodeFor(new UsageError('x')), 2);
+  assert.equal(exitCodeFor(new Error('git clone failed')), 1);
+  assert.equal(exitCodeFor(undefined), 1);
+  const root = sandbox();
+  try {
+    const base = { repo: root, ref: 'x', prompt: 'p', out: path.join(root, 'r.md'), tmpRoot: root, log() {} };
+    for (const bad of [{}, { maxTokens: 1.5 }, { budgetUsd: 3, timeoutMin: 0 }, { budgetUsd: 3, setup: ' ' }, { budgetUsd: 99 }, { budgetUsd: 3, prompt: '' }]) {
+      await runMeasure({ ...base, ...bad }).then(() => assert.fail('should refuse'), (e) => assert.equal(exitCodeFor(e), 2, JSON.stringify(bad)));
+    }
+    await runMeasure({ ...base, budgetUsd: 3, ref: 'does-not-exist', repo: root }).then(() => assert.fail('should fail'), (e) => assert.equal(exitCodeFor(e), 1));
+    assert.throws(() => parseCli(['--repo', 'r']), (e) => exitCodeFor(e) === 2);
+    assert.throws(() => parseCli(['--repo', 'r', '--ref', 'x', '--out', 'o', '--prompt-file', path.join(root, 'missing.txt')]), (e) => /cannot read the prompt file/.test(e.message) && exitCodeFor(e) === 2);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('POSIX kill path: arms spawn detached; the token cap and the timeout signal the process group (SIGTERM, then SIGKILL after 2 s)', { timeout: 20_000 }, async () => {
+  const realKill = process.kill;
+  const signals = [];
+  process.kill = (p, sig) => { if (p < 0) { signals.push([p, sig]); return true; } return realKill.call(process, p, sig); };
+  try {
+    const chunks = [assistantLine('m1', 60), assistantLine('m2', 50), assistantLine('m3', 5000)];
+    const capped = await runWith({ maxTokens: 100, platform: 'linux' }, { chunks, pid: 4242 });
+    assert.ok(capped.calls.every((c) => c.opts.detached === true), 'POSIX arms run in their own process group');
+    assert.deepEqual(capped.calls.map((c) => c.killed), [1, 1]);
+    assert.ok(capped.md.includes('| stopped at token cap | yes | yes |'));
+    const timedOut = await runWith({ budgetUsd: 1, timeoutMin: 0.001, platform: 'linux' }, { hang: true, pid: 4343 });
+    assert.ok(timedOut.md.includes('killed after the 0.001 min timeout'));
+    assert.deepEqual(signals.filter(([, s]) => s === 'SIGTERM'), [[-4242, 'SIGTERM'], [-4242, 'SIGTERM'], [-4343, 'SIGTERM'], [-4343, 'SIGTERM']]);
+    await new Promise((r) => setTimeout(r, 2300));
+    assert.equal(signals.filter(([p, s]) => s === 'SIGKILL' && p === -4242).length, 2, 'SIGKILL follows for each capped arm');
+    assert.equal(signals.filter(([p, s]) => s === 'SIGKILL' && p === -4343).length, 2, 'SIGKILL follows for each timed-out arm');
+  } finally {
+    process.kill = realKill;
+  }
+});
+
+test('win32 kill path: arms are not spawned detached', async () => {
+  const r = await runWith({ budgetUsd: 1, platform: 'win32' });
+  assert.ok(r.calls.every((c) => c.opts.detached === false));
 });

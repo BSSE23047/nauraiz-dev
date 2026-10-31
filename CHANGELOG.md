@@ -3,7 +3,10 @@
 ## 0.2.1 — 2026-10-31
 
 - measure: `--max-tokens` per-arm token cap for subscription plans; `--budget` is optional when it is set (at least one cap is required; both can be given). The harness counts input, output, cache creation and cache read tokens from the stream and kills the arm at the cap; the report gets a `stopped at token cap` row and the cap in the header.
-- measure: `--setup "<cmd>"` runs once in each clone before `claude` starts (its time and output are not part of the arm's numbers); a failing setup marks the run FAILED and skips both arms.
+- measure: `--setup "<cmd>"` runs once in each clone before `claude` starts (its time and output are not part of the arm's numbers); a failing setup marks the run FAILED and skips both arms. The setup runs with the full environment and outside the allowed-tools list (package lifecycle scripts run), and is killed after `--timeout-min`.
+- measure: on Linux and macOS the arms and the setup run in their own process group, and a timeout or the token cap kills the whole group (SIGTERM, then SIGKILL after 2 s); a setup that outlives `--timeout-min` no longer hangs the run. On Windows `taskkill /t /f` now runs before the child itself is killed, so a shell's descendants are no longer orphaned and left holding the clone.
+- measure: exit 2 for every argument refusal (including an unreadable `--prompt-file`), exit 1 for a failure while running.
+- measure: a report banner when the streamed count reached the token cap but the arm was not stopped; `--budget`/`--max-tokens` given without a value are refused.
 - measure: `pnpm` and `yarn` are in the default allowed tools next to `npm` and `npx`.
 
 ## 0.2.0 — 2026-10-31

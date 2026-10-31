@@ -31,10 +31,10 @@ Ask the owner to confirm each of these in one message. Never start on a guess:
 4. **Cap per arm.** At least one is required; the harness refuses to run without one.
    - On a subscription plan (limits are in tokens, not dollars) use `--max-tokens`: default suggestion 2,000,000 per arm on sonnet. The harness counts input, output, cache creation and cache read tokens from the stream and kills the arm when the count reaches the cap; the arm keeps its partial stream, still gets the gate, and the report row `stopped at token cap` says yes. The count is checked per assistant message, so an arm can overshoot a little.
    - On API billing use `--budget` (`--max-budget-usd`): default 3 USD.
-   - Both can be given; both then apply. Say the approximate totals: 2 x the cap (the approximate total cap: 2 x budget in USD, 2 x `--max-tokens` in tokens). Above 20 USD or 20,000,000 tokens per arm needs `--allow-high-budget`, and only on the owner's explicit say-so.
+   - Both can be given; both then apply. Say the approximate total cap for each one that applies: 2 x budget in USD, 2 x `--max-tokens` in tokens. Above 20 USD or 20,000,000 tokens per arm needs `--allow-high-budget`, and only on the owner's explicit say-so.
 5. **Gate command** to run in each clone afterwards (the repo's own test command), an optional
    `--setup "<cmd>"` run once in each clone before `claude` starts (for example `npm ci`; its time and
-   output are not part of the arm's numbers, and a failing setup stops the run before anything is spent),
+   output are not part of the arm's numbers, and a failing setup stops the run before anything is spent). The setup runs with the full environment, outside the allowed-tools list (package lifecycle scripts run), and is killed after `--timeout-min`,
    and an optional `--local-config <json file>` for the `with` clone. Without it the `with` clone
    gets `{ "gate": { "gate": "<cmd>" } }` from `--gate` (`{}` with no gate): guided local mode.
 6. **Report path.** Public repo: `docs/measure/YYYY-MM-DD-<slug>.md`. A repo that is not
@@ -48,8 +48,8 @@ Both arms run headless with `--permission-mode acceptEdits`, a fixed allowed-too
 
 1. Write the prompt to a file with Write (a temp file, not in a clone).
 2. Run, in one call, with a long Bash timeout (each arm can take 15 minutes):
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/measure/run.mjs" --repo <repo> --ref <sha> --prompt-file <file> --model <model> --max-tokens <n> | --budget <usd> --out <report.md> --gate "<cmd>" [--setup "<cmd>"] [--local-config <file>]`
-   (`--max-tokens`, `--budget` or both; at least one)
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/measure/run.mjs" --repo <repo> --ref <sha> --prompt-file <file> --model <model> [--max-tokens <n>] [--budget <usd>] --out <report.md> --gate "<cmd>" [--setup "<cmd>"] [--local-config <file>]`
+   (at least one of `--max-tokens` and `--budget`)
 3. Exit `1` with a FAILED report means `claude` could not be started, or an arm's `claude`
    exited non-zero with no result line, or `--setup` failed (the reason is on top of the report); exit `2` means a missing flag or cap: fix the arguments and ask before running again.
    Any other failure: report it and stop. Never re-run on your own; a re-run costs the
@@ -59,5 +59,5 @@ Both arms run headless with `--permission-mode acceptEdits`, a fixed allowed-too
 
 The run prints `WARNING:` lines when the report or a stream contains the home directory, the temp directory, the plugin's real path or a forbidden term. Show every such line to the owner before anything is committed or published; the raw `.jsonl` streams are never committed (`docs/measure/*.jsonl` is git-ignored).
 
-Read the report and show the owner the table. State only what it says, including `n=1 per arm; not a benchmark.` The raw streams sit next to it as `<report>.with.jsonl` and
+Read the report and show the owner the table. An arm marked `stopped at token cap` is partial: its numbers are not comparable with a finished arm, so say so. State only what it says, including `n=1 per arm; not a benchmark.` The raw streams sit next to it as `<report>.with.jsonl` and
 `<report>.without.jsonl`. Do not commit or publish anything unless asked.

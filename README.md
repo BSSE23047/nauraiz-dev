@@ -1,6 +1,6 @@
 # nauraiz-dev
 
-A Claude Code plugin for the way work gets done: it checks who owns an issue, asks the owner what only the owner can answer before building, runs a gate that reads real exit codes, and keeps memory that survives the session. It layers on [superpowers](https://github.com/obra/superpowers). Version 0.2.0: five hooks, thirteen skills, two agents.
+A Claude Code plugin for the way work gets done: it checks who owns an issue, asks the owner what only the owner can answer before building, runs a gate that reads real exit codes, and keeps memory that survives the session. It layers on [superpowers](https://github.com/obra/superpowers). Version 0.2.1: five hooks, thirteen skills, two agents.
 
 ## Install
 
@@ -120,7 +120,7 @@ None yet. Every number this plugin quotes will come from a `measure` report in `
 
 > Work on issue #N on branch B. Commit locally, do not push or open a PR. Report what you built, the gate results, decisions to confirm, risks and anything unverified.
 
-Each arm runs once and is capped by tokens (`--max-tokens`, for subscription plans: the harness counts the stream and stops the arm at the cap; suggested 2,000,000 per arm on sonnet), by dollars (`--budget`, passed as `--max-budget-usd`; suggested 3 USD), or by both; at least one is required. An optional `--setup "<cmd>"` runs once in each clone before `claude` starts (for example `npm ci`); its time is not counted. The report lists time, output, cache read and cache write tokens, gate result, questions asked (AskUserQuestion calls only; the decisions a headless run writes instead are not counted), approvals recorded, skills invoked, files touched, and the exact commands. One run per arm is n=1: a report is a data point, not a benchmark.
+Each arm runs once and is capped by tokens (`--max-tokens`, for subscription plans: the harness counts the stream and stops the arm at the cap; suggested 2,000,000 per arm on sonnet), by dollars (`--budget`, passed as `--max-budget-usd`; suggested 3 USD), or by both; at least one is required. An optional `--setup "<cmd>"` runs once in each clone before `claude` starts (for example `npm ci`); its time is not counted. The setup runs with your full environment and outside the allowed-tools list (package lifecycle scripts run), and is killed after `--timeout-min`. The report lists time, output, cache read and cache write tokens, gate result, questions asked (AskUserQuestion calls only; the decisions a headless run writes instead are not counted), approvals recorded, skills invoked, files touched, and the exact commands. One run per arm is n=1: a report is a data point, not a benchmark.
 
 ## Platforms and testing
 

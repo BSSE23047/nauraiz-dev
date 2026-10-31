@@ -129,6 +129,12 @@ export function parseStream(text) {
   };
 }
 
+/** input + output + cache creation + cache read tokens of a parsed arm (parseStream's `tokens`). */
+export const totalTokens = (a) => num(a?.tokens?.input) + num(a?.tokens?.output) + num(a?.tokens?.cacheRead) + num(a?.tokens?.cacheWrite);
+
+/** True when the finished stream counts `maxTokens` or more but the harness did not stop the arm at the cap. */
+export const tokenCapNotEnforced = (a, maxTokens) => Boolean(maxTokens) && !a?.stoppedAtTokenCap && totalTokens(a) >= maxTokens;
+
 /** The --settings content for both arms: the plugin installed under its marketplace id is switched off. */
 export function settingsJson() {
   return JSON.stringify({ enabledPlugins: { [PLUGIN_ID]: false } });
@@ -184,7 +190,7 @@ function resultCell(a) {
  * (claude's exit code). `failed` (a reason) puts a FAILED banner on top. Paths are placeholders
  * (`<plugin-dir>`, `<settings-file>`) so a report carries no local path.
  */
-export function formatReport({ date, task, prompt, model, arms, gate = {}, budgetUsd, maxTokens, setup, allowedTools = DEFAULT_ALLOWED_TOOLS, failed }) {
+export function formatReport({ date, task, prompt, model, arms, gate = {}, budgetUsd, maxTokens, setup, allowedTools = DEFAULT_ALLOWED_TOOLS, failed, warnings = [] }) {
   const rows = [
     ['result', resultCell],
     ['time', (a) => orNa(a.ms, (v) => `${(v / 1000).toFixed(1)} s`)],
@@ -203,6 +209,7 @@ export function formatReport({ date, task, prompt, model, arms, gate = {}, budge
   ];
   const out = [];
   if (failed) out.push(`**FAILED: ${failed}. The numbers below are incomplete.**`, '');
+  for (const w of warnings) out.push(`**WARNING: ${w}.**`, '');
   out.push(
     `# Measure: ${task}`,
     '',
@@ -223,15 +230,16 @@ export function formatReport({ date, task, prompt, model, arms, gate = {}, budge
     'The questions row counts AskUserQuestion calls only: headless runs write their questions as decisions in the answer text, and those are not counted.',
     "Under `claude -p` a PreToolUse `ask` from a hook is treated as a deny: the edit is refused with the hook's reason and listed in the result's permission denials (probed on Claude Code 2.1.314).",
     'Files touched are read from each clone after the run (committed, modified and untracked, repo-relative).',
+    ...(setup ? ['Files the setup created or changed are not listed under files touched, so an arm edit to a file the setup also changed is not listed either.'] : []),
     ...(maxTokens ? [`The token cap is enforced by the harness, not by a claude flag: it counts input, output, cache creation and cache read tokens per assistant message from the stream and kills the arm once the count reaches ${maxTokens}. A message can overshoot it, and the arm keeps its partial stream.`] : []),
   ].join(' '));
 
-  const common = { model, budgetUsd: budgetUsd === null ? undefined : (budgetUsd ?? '<budget>'), pluginDir: '<plugin-dir>', settingsFile: '<settings-file>', allowedTools };
+  const common = { model, budgetUsd, pluginDir: '<plugin-dir>', settingsFile: '<settings-file>', allowedTools };
   const cmd = (arm) => `claude ${buildArgs({ arm, ...common }).map(shellQuote).join(' ')} < <prompt-file>`;
   out.push(
     '', 'Commands (each arm runs once in its own fresh clone of the same ref):', '', '```sh', cmd('with'), cmd('without'), '```',
     '', `Both arms: \`--settings\` file contents \`${settingsJson()}\` (the installed copy is off; the \`with\` arm loads the plugin only through \`--plugin-dir\`).`,
-    '', `Safety, identical for both arms: \`--permission-mode ${PERMISSION_MODE}\`; allowed tools: \`${allowedTools}\`; pushing is disabled in each clone with \`git remote set-url --push origin ${PUSH_DISABLED}\` (the fetch URL stays so \`gh\` works). Only the disabled push URL is enforced; every other "no writes" rule rests on the allowed-tools list by convention, and \`node\` and \`npm\` can run anything.`,
+    '', `Safety, identical for both arms: \`--permission-mode ${PERMISSION_MODE}\`; allowed tools: \`${allowedTools}\`; pushing is disabled in each clone with \`git remote set-url --push origin ${PUSH_DISABLED}\` (the fetch URL stays so \`gh\` works). Only the disabled push URL is enforced; every other "no writes" rule rests on the allowed-tools list by convention, and \`node\` and \`npm\` can run anything.${setup ? ` The --setup command runs in each clone with the full environment, outside the allowed-tools list (package lifecycle scripts run), and is killed after --timeout-min.` : ''}`,
   );
   out.push('', 'n=1 per arm; not a benchmark.', '');
   return out.join('\n');

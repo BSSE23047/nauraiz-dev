@@ -11,7 +11,9 @@ import { fileURLToPath } from 'node:url';
 import { isMain } from '../lib/main.mjs';
 import { findRecordedApprovals } from '../lib/decide-edit.mjs';
 import { runGate } from '../gate/run.mjs';
-import { DEFAULT_ALLOWED_TOOLS, PUSH_DISABLED, buildArgs, createTokenCounter, formatReport, parseStream, settingsJson } from './parse.mjs';
+import {
+  DEFAULT_ALLOWED_TOOLS, PUSH_DISABLED, buildArgs, createTokenCounter, formatReport, parseStream, settingsJson, tokenCapNotEnforced, totalTokens,
+} from './parse.mjs';
 
 const ARMS = ['with', 'without'];
 const LOCAL_CONFIG_REL = '.claude/nauraiz-dev.local.json';
@@ -19,6 +21,12 @@ const DEFAULT_PLUGIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.u
 const MAX_BUDGET_WITHOUT_FLAG = 20;
 const MAX_TOKENS_WITHOUT_FLAG = 20_000_000;
 const DEFAULT_TIMEOUT_MIN = 30;
+
+/** A refusal caused by the arguments (exit 2), as opposed to a failure while running (exit 1). */
+export class UsageError extends Error {}
+
+/** The CLI exit code for an error thrown by parseCli/runMeasure. */
+export const exitCodeFor = (err) => (err instanceof UsageError ? 2 : 1);
 
 const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
 
@@ -67,11 +75,12 @@ const gitOrEmpty = (args, cwd) => { try { return git(args, cwd); } catch { retur
 const splitZ = (text) => text.split('\0').filter(Boolean);
 
 /** Repo-relative files the arm changed: tracked changes against `ref` plus untracked (not ignored) files. */
-export function changedFiles(cwd, ref, exclude = []) {
+export function changedFiles(cwd, ref, exclude = new Set()) {
+  const skip = new Set(exclude);
   const quiet = ['-c', 'core.quotepath=off'];
   const tracked = splitZ(gitOrEmpty([...quiet, 'diff', '--name-only', '-z', ref], cwd));
   const untracked = splitZ(gitOrEmpty([...quiet, 'ls-files', '--others', '--exclude-standard', '-z'], cwd));
-  return [...new Set([...tracked, ...untracked])].filter((f) => !exclude.includes(f)).sort();
+  return [...new Set([...tracked, ...untracked])].filter((f) => !skip.has(f)).sort();
 }
 
 function walkMarkdown(dir, depth = 0) {
@@ -106,16 +115,51 @@ export function countApprovals(cwd, ref, files) {
   return added.size;
 }
 
+const GROUP_KILL_GRACE_MS = 2000;
+
+/**
+ * Stop a child and everything it started. win32: `taskkill /t /f`. POSIX: the child was spawned
+ * `detached` (its own process group), so SIGTERM goes to the whole group and, if anything is still
+ * there after a grace period, SIGKILL; a bare `sh -c` kill would leave grandchildren running (and
+ * spending). A child without a pid (a test fake) only gets `child.kill()`. The tree kill comes first:
+ * on win32 `taskkill /t` walks the tree from the child, so killing the child (`cmd.exe` for a shell
+ * spawn) first would orphan its descendants, which then keep the pipes and the clone's folder busy.
+ */
 function killTree(child, platform) {
-  try { child.kill(); } catch { /* already gone */ }
-  if (platform === 'win32' && child.pid) {
+  const plainKill = () => { try { child.kill(); } catch { /* already gone */ } };
+  if (!child.pid) { plainKill(); return; }
+  if (platform === 'win32') {
     try { spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { shell: false, windowsHide: true, stdio: 'ignore' }); } catch { /* ignore */ }
+    plainKill();
+    return;
   }
+  const signalGroup = (signal) => { try { process.kill(-child.pid, signal); } catch { /* group already gone */ } };
+  signalGroup('SIGTERM');
+  plainKill();
+  setTimeout(() => signalGroup('SIGKILL'), GROUP_KILL_GRACE_MS);
+}
+
+/**
+ * POSIX only: the detached child is in its own process group, so Ctrl-C on the harness would not reach
+ * it. Until `dispose()`, an exit or SIGINT/SIGTERM of the harness SIGKILLs the child's group first.
+ */
+function guardGroup(child, platform) {
+  if (platform === 'win32' || !child.pid) return () => {};
+  const kill = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } };
+  const onSignal = (signal) => { kill(); process.exit(signal === 'SIGINT' ? 130 : 143); };
+  process.once('exit', kill);
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  return () => { process.off('exit', kill); process.off('SIGINT', onSignal); process.off('SIGTERM', onSignal); };
 }
 
 /**
  * Default setup executor: run `command` through the shell in `cwd` (the way the gate runs its commands),
- * killed with the same tree-kill as an arm after `timeoutMs`. Resolves { code, output, timedOut }.
+ * killed with the same tree-kill as an arm after `timeoutMs`. On timeout it resolves at once from the
+ * timer (code 1, output so far, timedOut true) and does not wait for the pipes to close: a grandchild that
+ * outlives the kill would otherwise hold them open. (win32: `taskkill /t` ends the whole tree, so it waits
+ * for the close, which lets the clone's folder be released before it is deleted, with a 3 s fallback.) It inherits the full environment and is not limited by
+ * the allowed-tools list. Resolves { code, output, timedOut }.
  */
 export function shellSetupExec(command, cwd, timeoutMs, platform = process.platform) {
   return new Promise((resolve) => {
@@ -123,16 +167,32 @@ export function shellSetupExec(command, cwd, timeoutMs, platform = process.platf
     let timedOut = false;
     let done = false;
     let timer;
-    const finish = (code) => { if (!done) { done = true; clearTimeout(timer); resolve({ code, output, timedOut }); } };
     let child;
+    let forceTimer;
+    let dispose = () => {};
+    const finish = (code) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      clearTimeout(forceTimer);
+      dispose();
+      resolve({ code, output, timedOut });
+    };
     try {
-      child = nodeSpawn(command, { cwd, shell: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = nodeSpawn(command, { cwd, shell: true, windowsHide: true, detached: platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) {
       output = String(e.message);
       finish(1);
       return;
     }
-    timer = setTimeout(() => { timedOut = true; killTree(child, platform); }, timeoutMs);
+    dispose = guardGroup(child, platform);
+    timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child, platform);
+      const giveUp = () => { child.stdout?.destroy?.(); child.stderr?.destroy?.(); finish(1); };
+      if (platform === 'win32') forceTimer = setTimeout(giveUp, 3000);
+      else giveUp();
+    }, timeoutMs);
     const take = (chunk) => { output += chunk; };
     child.stdout.setEncoding('utf8').on('data', take);
     child.stderr.setEncoding('utf8').on('data', take);
@@ -158,21 +218,25 @@ function runClaude({ spawn, command, args, cwd, input, timeoutMs, platform, maxT
     let done = false;
     let timer;
     const counter = maxTokens ? createTokenCounter() : null;
-    const finish = (r) => { if (!done) { done = true; clearTimeout(timer); resolve({ stdout, timedOut, stoppedAtTokenCap, ...r }); } };
+    let dispose = () => {};
+    const finish = (r) => { if (!done) { done = true; clearTimeout(timer); dispose(); resolve({ stdout, timedOut, stoppedAtTokenCap, ...r }); } };
     let child;
     try {
       const spec = spawnSpec(command, args, platform);
-      child = spawn(spec.command, spec.args, { cwd, shell: spec.shell, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      // POSIX: its own process group, so a kill reaches everything claude started
+      child = spawn(spec.command, spec.args, { cwd, shell: spec.shell, windowsHide: true, detached: platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
       finish({ code: null, spawnError: String(e.message) });
       return;
     }
+    dispose = guardGroup(child, platform);
     timer = setTimeout(() => { timedOut = true; killTree(child, platform); }, timeoutMs);
     child.stdout?.setEncoding?.('utf8');
     child.stderr?.setEncoding?.('utf8');
     child.stdout?.on('data', (c) => {
+      if (stoppedAtTokenCap) return; // the stream is cut at the chunk that reached the cap
       stdout += c;
-      if (!counter || stoppedAtTokenCap || done) return;
+      if (!counter || done) return;
       const total = counter.feed(c);
       if (total >= maxTokens) {
         stoppedAtTokenCap = true;
@@ -250,31 +314,31 @@ export async function runMeasure({
   const hasBudget = budgetUsd !== undefined && budgetUsd !== null;
   const hasTokens = maxTokens !== undefined && maxTokens !== null;
   if (!hasBudget && !hasTokens) {
-    throw new Error('at least one cap is required: pass --max-tokens <tokens per arm> (subscription plans) or --budget <usd per arm> (API billing); refusing to run');
+    throw new UsageError('at least one cap is required: pass --max-tokens <tokens per arm> (subscription plans) or --budget <usd per arm> (API billing); refusing to run');
   }
   if (hasBudget) {
     if (typeof budgetUsd !== 'number' || !(budgetUsd > 0) || !Number.isFinite(budgetUsd)) {
-      throw new Error('--budget <usd per arm> must be a number greater than 0; refusing to run');
+      throw new UsageError('--budget <usd per arm> must be a number greater than 0; refusing to run');
     }
     if (budgetUsd > MAX_BUDGET_WITHOUT_FLAG && !allowHighBudget) {
-      throw new Error(`--budget ${budgetUsd} is above ${MAX_BUDGET_WITHOUT_FLAG} USD per arm; pass --allow-high-budget if that is intended`);
+      throw new UsageError(`--budget ${budgetUsd} is above ${MAX_BUDGET_WITHOUT_FLAG} USD per arm; pass --allow-high-budget if that is intended`);
     }
   }
   if (hasTokens) {
     if (!(typeof maxTokens === 'number' && Number.isSafeInteger(maxTokens) && maxTokens > 0)) {
-      throw new Error('--max-tokens <tokens per arm> must be a positive integer; refusing to run');
+      throw new UsageError('--max-tokens <tokens per arm> must be a positive integer; refusing to run');
     }
     if (maxTokens > MAX_TOKENS_WITHOUT_FLAG && !allowHighBudget) {
-      throw new Error(`--max-tokens ${maxTokens} is above ${MAX_TOKENS_WITHOUT_FLAG} per arm; pass --allow-high-budget if that is intended`);
+      throw new UsageError(`--max-tokens ${maxTokens} is above ${MAX_TOKENS_WITHOUT_FLAG} per arm; pass --allow-high-budget if that is intended`);
     }
   }
-  if (!(typeof timeoutMin === 'number' && timeoutMin > 0 && Number.isFinite(timeoutMin))) throw new Error('--timeout-min must be a positive number');
-  if (setup !== undefined && (typeof setup !== 'string' || !setup.trim())) throw new Error('--setup must be a non-empty command');
+  if (!(typeof timeoutMin === 'number' && timeoutMin > 0 && Number.isFinite(timeoutMin))) throw new UsageError('--timeout-min must be a positive number');
+  if (setup !== undefined && (typeof setup !== 'string' || !setup.trim())) throw new UsageError('--setup must be a non-empty command');
   for (const [name, value] of [['--repo', repo], ['--ref', ref], ['--out', out]]) {
-    if (typeof value !== 'string' || !value) throw new Error(`${name} is required`);
+    if (typeof value !== 'string' || !value) throw new UsageError(`${name} is required`);
   }
-  if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('the prompt is empty');
-  if (ref.startsWith('-') || repo.startsWith('-')) throw new Error('--repo and --ref must not start with "-"');
+  if (typeof prompt !== 'string' || !prompt.trim()) throw new UsageError('the prompt is empty');
+  if (ref.startsWith('-') || repo.startsWith('-')) throw new UsageError('--repo and --ref must not start with "-"');
   const localConfigText = localConfig ? readFileSync(localConfig, 'utf8') : JSON.stringify(gate ? { gate: { gate } } : {});
   JSON.parse(localConfigText); // refuse a broken config before spending anything
 
@@ -293,6 +357,7 @@ export async function runMeasure({
   const gates = {};
   const written = [];
   const failures = [];
+  const warnings = [];
   const clones = {};
   const setupSecs = {};
   let setupFailure = null;
@@ -305,11 +370,11 @@ export async function runMeasure({
       git(['clone', '--no-hardlinks', repo, cwd]);
       git(['checkout', '--detach', ref], cwd);
       git(['remote', 'set-url', '--push', 'origin', PUSH_DISABLED], cwd);
-      const exclude = [];
+      const exclude = new Set();
       if (arm === 'with') {
         mkdirSync(path.join(cwd, '.claude'), { recursive: true });
         writeFileSync(path.join(cwd, ...LOCAL_CONFIG_REL.split('/')), localConfigText);
-        exclude.push(LOCAL_CONFIG_REL);
+        exclude.add(LOCAL_CONFIG_REL);
       }
       if (setup) {
         log(`[${arm}] setup: ${setup}`);
@@ -330,7 +395,7 @@ export async function runMeasure({
         setupSecs[arm] = secs;
         log(`[${arm}] setup ok (${secs.toFixed(1)} s)`);
         // what the setup left behind (node_modules, a lockfile) is not the arm's work
-        exclude.push(...changedFiles(cwd, ref, []));
+        for (const f of changedFiles(cwd, ref)) exclude.add(f);
       }
       clones[arm] = { cwd, exclude };
     }
@@ -362,6 +427,10 @@ export async function runMeasure({
       if (run.code !== 0 && !run.timedOut && !run.stoppedAtTokenCap && arms[arm].subtype === null) {
         failures.push(`the ${arm} arm: claude exited ${run.code ?? 'without a code'} with no result line`);
       }
+      if (hasTokens && tokenCapNotEnforced(arms[arm], maxTokens)) {
+        warnings.push(`the ${arm} arm: token cap reached but the arm was not stopped (${totalTokens(arms[arm])} tokens counted, cap ${maxTokens})`);
+        log(`[${arm}] WARNING: ${warnings.at(-1)}`);
+      }
       gates[arm] = null;
       if (gate) {
         const { ok, results } = await runGate({ cwd, config: { gate: { gate } }, exec: gateExec });
@@ -388,7 +457,7 @@ export async function runMeasure({
   const firstLine = prompt.trim().split(/\r?\n/)[0];
   const md = formatReport({
     date, task: task ?? (firstLine.length > 60 ? `${firstLine.slice(0, 57)}...` : firstLine), prompt: prompt.trim(), model,
-    arms, gate: gates, budgetUsd: hasBudget ? budgetUsd : null, maxTokens: hasTokens ? maxTokens : undefined, setup: setupInfo, allowedTools, failed,
+    arms, gate: gates, budgetUsd: hasBudget ? budgetUsd : null, maxTokens: hasTokens ? maxTokens : undefined, setup: setupInfo, allowedTools, failed, warnings,
   });
   writeFileSync(out, md);
   written.unshift(out);
@@ -416,14 +485,14 @@ export function parseCli(argv) {
     if (!flag.startsWith('--')) continue;
     const name = flag.slice(2);
     flags[name] = BOOLEAN_FLAGS.has(name) ? true : inline !== undefined ? inline : argv[++i];
-    if (flags[name] === undefined) throw new Error(`--${name} needs a value`);
+    if (flags[name] === undefined) throw new UsageError(`--${name} needs a value`);
   }
   for (const name of ['repo', 'ref', 'prompt-file', 'out']) {
-    if (!flags[name]) throw new Error(`--${name} is required`);
+    if (!flags[name]) throw new UsageError(`--${name} is required`);
   }
   let prompt;
   try { prompt = readFileSync(flags['prompt-file'], 'utf8').trim(); } catch (e) {
-    throw new Error(`cannot read the prompt file: ${e.message}`);
+    throw new UsageError(`cannot read the prompt file: ${e.message}`);
   }
   const opts = {
     repo: flags.repo,
@@ -448,12 +517,12 @@ if (isMain(import.meta.url)) {
   let opts;
   try { opts = parseCli(process.argv.slice(2)); } catch (e) {
     console.error(`nauraiz-dev: ${e.message}`);
-    process.exit(2);
+    process.exit(exitCodeFor(e));
   }
   runMeasure(opts).then((r) => {
     if (!r.ok) { console.error(`nauraiz-dev: FAILED: ${r.failed}`); process.exit(1); }
   }).catch((e) => {
     console.error(`nauraiz-dev: ${e.message}`);
-    process.exit(/--budget|--timeout-min|--max-tokens|--setup|--allow-high-budget|at least one cap/.test(e.message) ? 2 : 1);
+    process.exit(exitCodeFor(e));
   });
 }
