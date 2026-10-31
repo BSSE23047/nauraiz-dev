@@ -74,13 +74,13 @@ function validLayer(layer, name, errors) {
 
 /**
  * Load DEFAULTS <- <cwd>/.claude/nauraiz-dev.json <- <cwd>/.claude/nauraiz-dev.local.json.
- * Only <cwd>/.claude is read (no upward walk). Returns { config, found, present, error, mode }:
+ * Only <cwd>/.claude is read (no upward walk). Returns { config, found, present, localPresent, error, mode }:
  * - mode 'project': the project file parsed (the local file, if any, is layered over it).
  * - mode 'local': no project file, but the local file parsed; it is layered over DEFAULTS and treated
  *   as found, with the same post-processing as a project config. `present` stays false.
  * - mode 'none': neither file gave a config; defaults (advisory) with found=false.
  * `present` is true only when the project file exists, so callers can tell "no config" from
- * "config unreadable". `error` is set for an unparsable file (the project file's error wins over
+ * "config unreadable"; `localPresent` is the same for the local file. `error` is set for an unparsable file (the project file's error wins over
  * the local file's when both fail) and for wrong-shaped values. A wrong-shaped value in a layer is
  * skipped (with an error) and the layer below keeps its value. A found config that sets no
  * enforcement is guided.
@@ -91,10 +91,11 @@ export function loadConfig(cwd) {
   const local = readJson(path.join(dir, 'nauraiz-dev.local.json'));
   // A missing file gives { value: null } with no error, so an error on the project file means it exists.
   const projectPresent = Boolean(project.error) || project.value !== null;
+  const localPresent = Boolean(local.error) || local.value !== null;
 
   if (project.error || (project.value === null && !local.value)) {
     return {
-      config: clone(DEFAULTS), found: false, present: projectPresent,
+      config: clone(DEFAULTS), found: false, present: projectPresent, localPresent,
       error: project.error ?? local.error ?? null, mode: 'none',
     };
   }
@@ -113,7 +114,7 @@ export function loadConfig(cwd) {
   if (!merged.protectedPaths.includes('.env*')) merged.protectedPaths.push('.env*');
 
   return {
-    config: merged, found: true, present: project.value !== null,
+    config: merged, found: true, present: project.value !== null, localPresent,
     error: errors.length ? errors.join('; ') : null,
     mode: project.value !== null ? 'project' : 'local',
   };

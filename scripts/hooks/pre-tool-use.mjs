@@ -72,11 +72,11 @@ async function main() {
   if (typeof filePath !== 'string' || !filePath) return;
 
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
-  const { found, present, config: loadedConfig } = loadConfig(cwd);
+  const { found, present, localPresent, config: loadedConfig } = loadConfig(cwd);
   let config = loadedConfig;
   let plan = null;
-  if (!found && present) {
-    // The project file exists but is unreadable: the user opted in, so keep the always-on .env* deny
+  if (!found && (present || localPresent)) {
+    // A config file (project or local-only) exists but is unreadable: the user opted in, so keep the always-on .env* deny
     // and the approval ask, and nothing else (no scope ask: no plan is looked up) until the file is
     // fixed. SessionStart reports the error.
     config = { ...config, enforcement: 'guided', protectedPaths: ['.env*'] };

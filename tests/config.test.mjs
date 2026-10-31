@@ -199,3 +199,18 @@ test('unreadable local-only file reports the error and no config', () => {
     assert.match(r.error, /invalid JSON/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('localPresent is true whenever the local file exists, readable or not', () => {
+  assert.equal(loadConfig(fx('empty')).localPresent, false);
+  assert.equal(loadConfig(fx('scaffold')).localPresent, false);
+  assert.equal(loadConfig(fx('local-only')).localPresent, true);
+  assert.equal(loadConfig(fx('bad-local')).localPresent, true);
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-local-bad-'));
+  try {
+    mkdirSync(path.join(dir, '.claude'));
+    writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.local.json'), '{oops');
+    const r = loadConfig(dir);
+    assert.equal(r.found, false);
+    assert.equal(r.localPresent, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

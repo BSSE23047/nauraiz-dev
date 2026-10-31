@@ -180,3 +180,8 @@ test('with oldText only a NEW approval value asks', () => {
   // a second, different approval is new
   assert.equal(decideEdit({ ...base, oldText: recorded, newText: recorded + 'new_files_approval: ok\n' }).decision, 'ask');
 });
+
+test('an edit under .git/ is bookkeeping: no scope ask even with an Allowed list', () => {
+  const r = decideEdit({ cwd, filePath: 'D:/repo/.git/COMMIT_EDITMSG', config: config(), found: true, plan });
+  assert.equal(r.decision, 'allow');
+});

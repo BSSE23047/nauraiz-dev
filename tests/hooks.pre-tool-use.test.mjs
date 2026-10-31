@@ -178,3 +178,19 @@ test('approval in a plan: value-only Edit, unchanged approvals and unrelated edi
   const rewrite = await runHook('pre-tool-use', { cwd: dir, tool_name: 'Write', tool_input: { file_path, content: '---\ntitle: c\nshared_layer_approval: owner kickoff\n---\nbody\n' } });
   assert.deepEqual([rewrite.stdout, rewrite.code], ['', 0]);
 });
+
+test('unreadable local-only config still denies .env* and asks nothing else', async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nd-pretool-badlocal-'));
+  const data = mkdtempSync(path.join(os.tmpdir(), 'nd-pretool-data-'));
+  t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(data, { recursive: true, force: true }); });
+  mkdirSync(path.join(dir, '.claude'));
+  writeFileSync(path.join(dir, '.claude', 'nauraiz-dev.local.json'), '{ not json');
+  const env = { CLAUDE_PLUGIN_DATA: data };
+  const deny = await runHook('pre-tool-use', { cwd: dir, tool_name: 'Write', tool_input: { file_path: path.join(dir, '.env'), content: 'X=1' } }, env);
+  assert.equal(deny.code, 0);
+  const out = decisionOf(deny.stdout);
+  assert.equal(out.permissionDecision, 'deny');
+  assert.match(out.permissionDecisionReason, /\.env is protected \(\.env\*\)/);
+  const other = await runHook('pre-tool-use', { cwd: dir, tool_name: 'Edit', tool_input: { file_path: path.join(dir, 'src', 'a.js') } }, env);
+  assert.deepEqual([other.stdout, other.code], ['', 0]);
+});
