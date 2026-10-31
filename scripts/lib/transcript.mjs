@@ -41,6 +41,11 @@ function toEntry(rec) {
 export function readTranscript(file) {
   let text;
   try { text = readFileSync(file, 'utf8'); } catch { return []; }
+  return parseTranscript(text);
+}
+
+/** Entries of a transcript's text (see readTranscript). */
+function parseTranscript(text) {
   const entries = [];
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -94,7 +99,10 @@ export function subagentUsage(transcriptPath, { cache = {}, maxBytes = SUBAGENT_
       continue;
     } else {
       budget -= st.size;
-      fileTotals = tokenTotals(readTranscript(file));
+      let text;
+      // a read error (EBUSY, EACCES) is not an empty file: leave it uncached so the next stop reads it again
+      try { text = readFileSync(file, 'utf8'); } catch { continue; }
+      fileTotals = tokenTotals(parseTranscript(text));
     }
     next[file] = { size: st.size, mtimeMs: st.mtimeMs, totals: fileTotals };
     for (const k of Object.keys(totals)) totals[k] += Number(fileTotals[k]) || 0;

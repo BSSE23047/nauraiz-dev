@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isBookkeeping, isUnderPlanDir } from '../scripts/lib/bookkeeping.mjs';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -61,4 +61,21 @@ test('a git dir placed inside the project (separate-git-dir) is bookkeeping too'
   assert.equal(isBookkeeping('meta/gitdata/HEAD', config, repo), true);
   assert.equal(isBookkeeping('meta/other.txt', config, repo), false);
   assert.equal(isBookkeeping('meta/gitdata/HEAD', config), false); // without cwd only .git/ is known
+});
+
+test('a git dir inside the project is found through a symlinked cwd (git reports the real path)', (t) => {
+  const parent = mkdtempSync(path.join(os.tmpdir(), 'nd-bk-link-'));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const repo = path.join(parent, 'real');
+  mkdirSync(path.join(repo, 'meta'), { recursive: true });
+  execFileSync('git', ['init', '-q', `--separate-git-dir=${path.join(repo, 'meta', 'gitdata')}`, repo], { stdio: 'ignore' });
+  const link = path.join(parent, 'link');
+  try {
+    symlinkSync(repo, link, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (e) {
+    t.skip(`cannot create a directory link here (${e.code ?? e.message})`);
+    return;
+  }
+  assert.equal(isBookkeeping('meta/gitdata/HEAD', config, link), true);
+  assert.equal(isBookkeeping('meta/other.txt', config, link), false);
 });

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { readTranscript, readSubagentEntries, subagentUsage, elapsedMinutes, lastEditTs, lastGateTs, gatePrefixes, tokenTotals } from '../scripts/lib/transcript.mjs';
@@ -194,4 +195,25 @@ test('subagentUsage stops reading past maxBytes and reports partial; cached file
   const cachedRun = subagentUsage(transcript, { cache: warm, maxBytes: 10 });
   assert.equal(cachedRun.partial, false);
   assert.equal(cachedRun.totals.output, 4000);
+});
+
+test('subagentUsage does not cache a file it could not read, so the next call reads it again', (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'nd-sub-unread-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const transcript = path.join(root, 'sess.jsonl');
+  writeFileSync(transcript, '');
+  const subDir = path.join(root, 'sess', 'subagents');
+  const file = path.join(subDir, 'agent-b.jsonl');
+  mkdirSync(file, { recursive: true }); // stat works, read fails (EISDIR), like a transient read error
+  const first = subagentUsage(transcript);
+  assert.equal(first.totals.output, 0);
+  assert.deepEqual(Object.keys(first.cache), [], 'an unreadable file is not cached');
+  rmSync(file, { recursive: true, force: true });
+  writeFileSync(file, JSON.stringify({ type: 'assistant', message: { id: 'm1', role: 'assistant', usage: { output_tokens: 42 } } }) + '\n');
+  assert.equal(subagentUsage(transcript, { cache: first.cache }).totals.output, 42);
+  // an empty file is readable: cached with zero totals
+  writeFileSync(file, '');
+  const empty = subagentUsage(transcript);
+  assert.equal(Object.keys(empty.cache).length, 1);
+  assert.equal(empty.totals.total, 0);
 });

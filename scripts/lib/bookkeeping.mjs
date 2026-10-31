@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { matchesAny, normalize, toRelative } from './paths.mjs';
 
@@ -23,14 +24,23 @@ function gitDirPatterns(cwd) {
   if (typeof cwd !== 'string' || !cwd) return [];
   if (gitDirCache.has(cwd)) return gitDirCache.get(cwd);
   const out = [];
+  // git reports real paths; a cwd reached through a link (macOS /var -> /private/var) must be compared both ways
+  const bases = [cwd];
+  try {
+    const real = realpathSync(cwd);
+    if (real !== cwd) bases.push(real);
+  } catch {
+    // an unresolvable cwd is compared as given
+  }
+  const isOutside = (rel) => rel === '' || rel === '..' || rel.startsWith('../') || rel.startsWith('/') || /^[A-Za-z]:/.test(rel);
   try {
     const lines = execFileSync('git', ['rev-parse', '--absolute-git-dir', '--git-common-dir'], {
       cwd, stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, encoding: 'utf8',
     }).split(/\r?\n/).filter(Boolean);
     for (const line of lines) {
-      const rel = toRelative(cwd, path.resolve(cwd, line));
-      const outside = rel === '' || rel === '..' || rel.startsWith('../') || rel.startsWith('/') || /^[A-Za-z]:/.test(rel);
-      if (!outside && !out.includes(`/${rel}/`)) out.push(`/${rel}/`);
+      const abs = path.resolve(cwd, line);
+      const rel = bases.map((base) => toRelative(base, abs)).find((r) => !isOutside(r));
+      if (rel !== undefined && !out.includes(`/${rel}/`)) out.push(`/${rel}/`);
     }
   } catch {
     // not a repo, or git missing: only the literal .git/ applies
