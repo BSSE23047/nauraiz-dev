@@ -73,13 +73,18 @@ function duplicateHooks(settings) {
   return found;
 }
 
+/** Claude Code's config dir: CLAUDE_CONFIG_DIR when set, else ~/.claude. */
+export function claudeHome(env = process.env) {
+  return env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+}
+
 /**
  * Whether superpowers is installed (user plugin registry) and enabled in the settings that apply to `cwd`:
  * `<home>/settings.json`, then `<cwd>/.claude/settings.json`, then `<cwd>/.claude/settings.local.json`.
  * A later file that mentions a superpowers key overrides an earlier one, so a project-scope enable counts
  * and a local `false` switches it off. Unreadable files count as absent.
  */
-export function superpowersStatus({ cwd, home = path.join(os.homedir(), '.claude') }) {
+export function superpowersStatus({ cwd, home = claudeHome() }) {
   const installedMap = readJsonObject(path.join(home, 'plugins', 'installed_plugins.json'))?.plugins;
   const installed = hasPlugin(isPlainObject(installedMap) ? Object.keys(installedMap) : [], 'superpowers');
   let enabled = false;
@@ -97,10 +102,10 @@ export function superpowersStatus({ cwd, home = path.join(os.homedir(), '.claude
 }
 
 /**
- * Inspect `home` (default ~/.claude) and report the machine state plus the fixes to offer.
+ * Inspect `home` (default CLAUDE_CONFIG_DIR, else ~/.claude) and report the machine state plus the fixes to offer.
  * `skipClaude` skips running `claude --version`; `nodeVersion` is for tests.
  */
-export function check({ home = path.join(os.homedir(), '.claude'), skipClaude = false, nodeVersion = process.version } = {}) {
+export function check({ home = claudeHome(), skipClaude = false, nodeVersion = process.version } = {}) {
   const settings = readJsonObject(path.join(home, 'settings.json')) ?? {};
   const installedMap = readJsonObject(path.join(home, 'plugins', 'installed_plugins.json'))?.plugins;
   const installedKeys = isPlainObject(installedMap) ? Object.keys(installedMap) : [];

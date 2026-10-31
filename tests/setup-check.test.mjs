@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { check, nodeStatus, superpowersStatus } from '../scripts/setup/check.mjs';
+import { check, claudeHome, nodeStatus, superpowersStatus } from '../scripts/setup/check.mjs';
 import { forbiddenPattern } from './forbidden.mjs';
 
 const FORBIDDEN = forbiddenPattern();
@@ -280,3 +280,18 @@ test('superpowersStatus: not installed, other plugins and missing files are fals
     assert.deepEqual(superpowersStatus({ cwd, home }), { installed: false, enabled: false });
   });
 });
+
+test('superpowersStatus and check default to CLAUDE_CONFIG_DIR when it is set', () => withHomeAndCwd({
+  home: { ...installedFile, 'settings.json': { enabledPlugins: { [SP]: true } } },
+}, ({ home, cwd }) => {
+  const prev = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = home;
+  try {
+    assert.deepEqual(superpowersStatus({ cwd }), { installed: true, enabled: true });
+    assert.equal(claudeHome(), home);
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = prev;
+  }
+  assert.equal(claudeHome({}), path.join(os.homedir(), '.claude'));
+  assert.equal(claudeHome({ CLAUDE_CONFIG_DIR: '' }), path.join(os.homedir(), '.claude'));
+}));

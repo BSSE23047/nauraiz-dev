@@ -87,7 +87,8 @@ test('init skill frontmatter', () => {
   assert.match(fm, /^allowed-tools: Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/init\/detect\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/show\.mjs" \*\) Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/init\/exclude\.mjs" \*\) Read Write Edit Glob$/m);
   assert.doesNotMatch(text.split('---\n').slice(2).join('---\n'), /Templates are in/);
   const body = text.split('---\n').slice(2).join('---\n');
-  for (const needle of ['--local', '--print', '.claude/nauraiz-dev.local.json', '.claude/settings.local.json', 'exclude.mjs', 'sharedPaths', 'offeredGate', 'testOneShot']) {
+  for (const needle of ['--local', '--print', '.claude/nauraiz-dev.local.json', '.claude/settings.local.json', 'exclude.mjs', 'sharedPaths', 'offeredGate', 'testOneShot',
+    'only the keys that differ from the tracked file', 'Never copy `protectedPaths`, `sharedPaths` or gate entries the tracked']) {
     assert.ok(body.includes(needle), `init skill must mention ${needle}`);
   }
   assert.ok(lines(text).length <= 110);
@@ -100,6 +101,7 @@ test('no client material in templates, the init and task skills, the agents, the
     'skills/capture-lesson', 'skills/memory-hygiene', 'skills/find-skills', 'scripts/memory', 'tests/fixtures/memory',
     'evals/capture-lesson-triggers', 'evals/memory-hygiene-triggers',
     'evals/start-task-triggers', 'evals/start-task-small-negative', 'evals/grill-asks-on-decisions', 'evals/kickoff-triggers',
+    'evals/grill-small-negative', 'evals/start-task-taken-stops',
     'evals/gate-triggers', 'evals/ship-not-model-invoked', 'evals/review-triggers',
     'tests/fixtures/repos/npm-app', 'tests/fixtures/repos/flutter-app',
     'skills/measure', 'scripts/measure', 'tests/fixtures/measure',
@@ -227,7 +229,18 @@ test('evals for start-task, grill and kickoff-prompt exist with the expected gra
   const k = evalCase('kickoff-triggers');
   assert.match(k.prompt, /^write a kickoff prompt for issue 12/m);
   assert.ok(k.graders.includes(skillFired('kickoff-prompt')));
-  for (const c of [t, n, g, k]) assert.match(c.prompt, /^---\ndescription: .+\nmax_turns: \d+\nallowed_tools: \[/);
+  const gs = evalCase('grill-small-negative');
+  assert.match(gs.prompt, /^fix the typo .* in README line 3$/m);
+  assert.match(gs.prompt, /^allowed_tools: \[.*AskUserQuestion.*\]$/m, 'the tool must be available for "never asked" to mean anything');
+  assert.match(gs.graders, /^tool: AskUserQuestion$/m);
+  assert.match(gs.graders, /^max: 0$/m);
+  const ts = evalCase('start-task-taken-stops');
+  assert.match(ts.prompt, /"verdict": "taken"/);
+  assert.match(ts.prompt, /^allowed_tools: \[.*Edit, Write\]$/m, 'Edit and Write are available, so "not used" is a real stop');
+  for (const tool of ['Edit', 'Write']) assert.match(ts.graders, new RegExp(`^tool: ${tool}\\ninput_match: .+\\nmin: 0\\nmax: 0$`, 'm'));
+  assert.match(ts.graders, /^type: llm$/m);
+  assert.match(ts.graders, /names other-dev/);
+  for (const c of [t, n, g, k, gs, ts]) assert.match(c.prompt, /^---\ndescription: .+\nmax_turns: \d+\nallowed_tools: \[/);
 });
 
 const GATE_CMD = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/gate/run.mjs"';
@@ -409,6 +422,7 @@ test('capture-lesson, memory-hygiene and find-skills: short trigger-first descri
   assert.doesNotMatch(find.body, /gh api repos/, 'a raw read goes through the permission prompt, never a pre-approved gh api');
   for (const needle of [
     'npx skills find', 'gh search repos', 'offline, nothing suggested', 'at most 5', 'install command', 'listing cost', 'chars', 'Never run an install command',
+    'gh search code description --filename SKILL.md --repo <owner>/<repo>',
   ]) assert.ok(find.body.includes(needle), `find-skills must mention ${needle}`);
 });
 

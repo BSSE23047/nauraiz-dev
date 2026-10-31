@@ -49,17 +49,19 @@ they can be combined, and with neither it is project mode.
      `offeredGate` entry as an extra `gate` command, and `testOneShot` in place of the
      `test` command, which would watch forever. Use only what the user accepts.
 
-3. Write `.claude/nauraiz-dev.json` from `templates/nauraiz-dev.json`. In `--local` write the
-   whole config (state `none`) to `.claude/nauraiz-dev.local.json` instead, without `$comment`:
+3. Write `.claude/nauraiz-dev.json` from `templates/nauraiz-dev.json`. In `--local` with no tracked
+   config, write the whole config (state `none`) to `.claude/nauraiz-dev.local.json`, no `$comment`:
    - `state` and `enforcement` from step 2; `gate`, `protectedPaths` and `sharedPaths` from detect;
      `branch.base` = `baseBranch`; `plan.dir` = `docs/superpowers/plans` for
      `scaffold`, `.work/tasks` for `none`.
    - Re-detecting (the file exists): start from it. `gate`, `protectedPaths` and `sharedPaths`
      are the union of existing and detected entries; never remove or rewrite an existing
-     gate command or protected path. Show the diff. `--local`: a tracked
-     `.claude/nauraiz-dev.json` is only a base and is never edited; start from an existing
-     `.claude/nauraiz-dev.local.json` if there is one, else from the tracked file, and write
-     the merged result to the local file.
+     gate command or protected path. Show the diff.
+   - `--local` with a tracked `.claude/nauraiz-dev.json`: never edit it, and do not write the
+     whole config. Write to the local file (merged into an existing one)
+     only the keys that differ from the tracked file: `mockupRoot`, an accepted extra gate
+     entry, `enforcement` if chosen differently. Never copy `protectedPaths`, `sharedPaths` or gate entries the tracked
+     file already has: local arrays replace the team's, so a copy would freeze them.
    - `scopeAsk`: see step 6.
    - No `{{` may remain. Keep `$comment` (project mode).
    - If the user named a mockup root or another machine-specific path, write it as

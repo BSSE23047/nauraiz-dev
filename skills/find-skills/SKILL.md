@@ -20,7 +20,7 @@ whether or not the skill is used.
    - `npx skills find <query>`.
    - `gh search repos <query> skill --limit 10 --json fullName,description,url`, then
      confirm each candidate holds a skill file with
-     `gh search code --filename SKILL.md --repo <owner>/<repo>`.
+     `gh search code description --filename SKILL.md --repo <owner>/<repo>` (search needs a query term).
    - Neither works, or no network: say **offline, nothing suggested** and stop.
 
 3. **Validate.** Drop any result whose repository you could not confirm exists. To count
