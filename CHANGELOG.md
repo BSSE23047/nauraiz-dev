@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.5 — 2026-11-01
+
+init offers skill suggestions, and setup says when a newer release exists.
+
+- init: a last step asks one yes/no question, "Suggest skills for this project's stack now? It needs network and never installs anything." Yes runs `/nauraiz-dev:find-skills`; no prints "Run /nauraiz-dev:find-skills any time." Not asked in `--print` or when `AskUserQuestion` is unavailable. Both default and `--local` modes.
+- setup: `scripts/setup/check.mjs` exports `latestRelease({ run })` (the highest `refs/tags/vX.Y.Z` from `git ls-remote --tags --refs` on the public repo, injectable runner, 10 s timeout, never throws; failure gives `version: null` and a reason) and `compareVersions(a, b)`. The check output gains `update: { installed, latest, behind, reason }`, with `installed` read from the plugin's own `plugin.json`. When behind, `fixes` gets `claude plugin marketplace update nauraiz-dev && claude plugin update nauraiz-dev@nauraiz-dev` and `reason` carries the note to start a new session and to turn on auto-update in `/plugin`. Offline gives `behind: null`. The CLI takes `--no-update` (env `NAURAIZ_SKIP_UPDATE=1`) to skip the call; `check()` itself touches no network unless handed a `latest` function. The session-start hook never checks for updates.
+- setup skill reports the update line: up to date, behind with the commands, or could not check.
+- README: an "Updating" section.
+
 ## 0.2.4 — 2026-11-01
 
 The ownership check now finds pull requests that never name the issue. Two real cases it reported as free: an open PR whose only link to the issue was GitHub's linked-issue field, and an open PR on a branch named `fix/<n>-...` whose title and body never contained `#<n>`.

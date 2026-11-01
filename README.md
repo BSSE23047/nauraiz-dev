@@ -1,6 +1,6 @@
 # nauraiz-dev
 
-A Claude Code plugin for the way work gets done: it checks who owns an issue, asks the owner what only the owner can answer before building, runs a gate that reads real exit codes, and keeps memory that survives the session. It layers on [superpowers](https://github.com/obra/superpowers). Version 0.2.4: five hooks, thirteen skills, two agents.
+A Claude Code plugin for the way work gets done: it checks who owns an issue, asks the owner what only the owner can answer before building, runs a gate that reads real exit codes, and keeps memory that survives the session. It layers on [superpowers](https://github.com/obra/superpowers). Version 0.2.5: five hooks, thirteen skills, two agents.
 
 ## Install
 
@@ -15,7 +15,20 @@ Inside a session the same two steps are `/plugin marketplace add BSSE23047/naura
 
 Needs Node 20 or newer on the PATH and Claude Code. The plugin depends on `superpowers@claude-plugins-official`. If install reports a cross-marketplace dependency error, add `"allowCrossMarketplaceDependenciesOn": ["claude-plugins-official"]` to `~/.claude/settings.json` and install again.
 
-Then run `/nauraiz-dev:setup` once per machine. It checks Node, Claude Code, superpowers, that the hooks are registered once and that auto-memory is on.
+Then run `/nauraiz-dev:setup` once per machine. It checks Node, Claude Code, superpowers, that the hooks are registered once, that auto-memory is on and whether a newer release exists.
+
+## Updating
+
+Manual, two commands and a new session:
+
+```
+claude plugin marketplace update nauraiz-dev
+claude plugin update nauraiz-dev@nauraiz-dev
+```
+
+For automatic updates, open `/plugin`, go to the marketplaces tab, pick `nauraiz-dev` and turn on auto-update.
+
+`/nauraiz-dev:setup` tells you when you are behind: it asks GitHub for the newest `vX.Y.Z` tag with one `git ls-remote` call (10 seconds at most) and compares it with the installed version. Offline it says it could not check and nothing else changes. The session-start hook never makes that call.
 
 ## Set up a project
 
@@ -32,7 +45,7 @@ In local mode the session header adds the gate command names and the "read real 
 
 `/nauraiz-dev:init --print` prints every file it would write, with paths, and writes nothing. It is the way to set up from CI or from `claude -p`.
 
-`init` detects your stack and offers the gate commands it finds (build, test, and npm scripts named like `check`, `verify`, `typecheck` or `e2e`, Makefile `check` and `test` targets). When `test` would start a watcher, it proposes the one-shot form. It never invents a gate command.
+`init` detects your stack and offers the gate commands it finds (build, test, and npm scripts named like `check`, `verify`, `typecheck` or `e2e`, Makefile `check` and `test` targets). When `test` would start a watcher, it proposes the one-shot form. It never invents a gate command. When it finishes it offers, as one yes/no question, to suggest skills for the project's stack (`/nauraiz-dev:find-skills`: needs network, never installs anything); it skips the offer in `--print` and in headless runs.
 
 ## The skills
 

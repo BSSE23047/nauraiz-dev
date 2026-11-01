@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { check, claudeHome, nodeStatus, superpowersStatus } from '../scripts/setup/check.mjs';
+import { check, claudeHome, compareVersions, installedVersion, latestRelease, nodeStatus, superpowersStatus } from '../scripts/setup/check.mjs';
 import { forbiddenPattern } from './forbidden.mjs';
 
 const FORBIDDEN = forbiddenPattern();
@@ -177,9 +177,9 @@ test('node below 20 puts an install line first', () => {
 });
 
 test('CLI: --home and --no-claude print the JSON; NAURAIZ_SKIP_CLAUDE=1 also skips claude', () => {
-  const out = execFileSync(process.execPath, [script, '--home', fixtureHome, '--no-claude'], { encoding: 'utf8' });
+  const out = execFileSync(process.execPath, [script, '--home', fixtureHome, '--no-claude', '--no-update'], { encoding: 'utf8' });
   assert.deepEqual(JSON.parse(out), run(fixtureHome));
-  const env = { ...process.env, NAURAIZ_SKIP_CLAUDE: '1' };
+  const env = { ...process.env, NAURAIZ_SKIP_CLAUDE: '1', NAURAIZ_SKIP_UPDATE: '1' };
   const out2 = execFileSync(process.execPath, [script, '--home', fixtureHome], { encoding: 'utf8', env });
   assert.deepEqual(JSON.parse(out2).claude, { version: null });
 });
@@ -189,7 +189,7 @@ test('claude not on PATH: version null and an install line comes first', () => {
   try {
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== 'path' && k !== 'NAURAIZ_SKIP_CLAUDE'));
     env.PATH = empty;
-    const out = execFileSync(process.execPath, [script, '--home', fixtureHome], { encoding: 'utf8', env });
+    const out = execFileSync(process.execPath, [script, '--home', fixtureHome, '--no-update'], { encoding: 'utf8', env });
     const r = JSON.parse(out);
     assert.deepEqual(r.claude, { version: null });
     assert.match(r.fixes[0], /^Install Claude Code/);
@@ -295,3 +295,111 @@ test('superpowersStatus and check default to CLAUDE_CONFIG_DIR when it is set', 
   assert.equal(claudeHome({}), path.join(os.homedir(), '.claude'));
   assert.equal(claudeHome({ CLAUDE_CONFIG_DIR: '' }), path.join(os.homedir(), '.claude'));
 }));
+
+// ---- 0.2.5: update check ----
+
+const lsRemote = (...tags) => tags.map((t, i) => `${String(i).padStart(40, 'a')}\trefs/tags/${t}`).join('\n') + '\n';
+const okRun = (stdout) => () => ({ code: 0, stdout, stderr: '' });
+const UPDATE_FIX = 'claude plugin marketplace update nauraiz-dev && claude plugin update nauraiz-dev@nauraiz-dev';
+
+test('compareVersions: numeric per part, so 0.2.10 > 0.2.9; leading v ignored', () => {
+  assert.equal(compareVersions('0.2.10', '0.2.9'), 1);
+  assert.equal(compareVersions('0.2.9', '0.2.10'), -1);
+  assert.equal(compareVersions('1.0.0', '0.99.99'), 1);
+  assert.equal(compareVersions('0.2.5', '0.2.5'), 0);
+  assert.equal(compareVersions('v0.3.0', '0.2.9'), 1);
+  assert.equal(compareVersions('garbage', '0.2.9'), 0);
+});
+
+test('latestRelease: parses refs/tags/vX.Y.Z and picks the highest, not the last or the lexical one', () => {
+  const calls = [];
+  const run = (args) => { calls.push(args); return { code: 0, stdout: lsRemote('v0.2.9', 'v0.2.10', 'v0.1.0', 'v0.2.2'), stderr: '' }; };
+  assert.deepEqual(latestRelease({ run }), { version: '0.2.10', reason: 'ok' });
+  assert.deepEqual(calls, [['ls-remote', '--tags', '--refs', 'https://github.com/BSSE23047/nauraiz-dev.git']]);
+});
+
+test('latestRelease: ignores tags that are not vX.Y.Z', () => {
+  const out = lsRemote('v0.3.0-rc1', 'nightly', 'v1', '0.9.9', 'v0.2.4', 'release/v5.0.0');
+  assert.deepEqual(latestRelease({ run: okRun(out) }), { version: '0.2.4', reason: 'ok' });
+});
+
+test('latestRelease: no tags, or none that parse, gives null with a reason', () => {
+  for (const out of ['', '\n', lsRemote('nightly', 'v1')]) {
+    const r = latestRelease({ run: okRun(out) });
+    assert.equal(r.version, null);
+    assert.match(r.reason, /no vX\.Y\.Z tags/);
+  }
+});
+
+test('latestRelease: a failing, throwing or odd runner gives null with a reason and never throws', () => {
+  const failed = latestRelease({ run: () => ({ code: 128, stdout: '', stderr: 'fatal: unable to access\nmore' }) });
+  assert.equal(failed.version, null);
+  assert.match(failed.reason, /could not reach the release list: fatal: unable to access$/);
+  assert.equal(latestRelease({ run: () => ({ code: null, stdout: '', stderr: 'spawn git ENOENT' }) }).version, null);
+  const thrown = latestRelease({ run: () => { throw new Error('boom'); } });
+  assert.equal(thrown.version, null);
+  assert.match(thrown.reason, /boom/);
+  assert.equal(latestRelease({ run: () => null }).version, null);
+  assert.equal(latestRelease({ run: () => ({ code: 0, stdout: undefined }) }).version, null);
+});
+
+test('installedVersion is the plugin.json version', () => {
+  const plugin = JSON.parse(readFileSync(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8'));
+  assert.equal(installedVersion(), plugin.version);
+  assert.equal(check({ home: fixtureHome, skipClaude: true }).update.installed, plugin.version);
+});
+
+test('check without a latest runner touches no network: behind null, no update fix', () => {
+  const r = check({ home: fixtureHome, skipClaude: true, version: '0.2.0' });
+  assert.deepEqual(r.update, { installed: '0.2.0', latest: null, behind: null, reason: 'not checked' });
+  assert.ok(!r.fixes.includes(UPDATE_FIX));
+});
+
+test('update: behind adds the fix line last and a reason with the note', () => {
+  const r = check({ home: fixtureHome, skipClaude: true, version: '0.2.4', latest: () => latestRelease({ run: okRun(lsRemote('v0.2.5', 'v0.2.10')) }) });
+  assert.equal(r.update.installed, '0.2.4');
+  assert.equal(r.update.latest, '0.2.10');
+  assert.equal(r.update.behind, true);
+  assert.match(r.update.reason, /then start a new session; to get updates automatically, turn on auto-update for the nauraiz-dev marketplace in \/plugin/);
+  assert.equal(r.fixes.at(-1), UPDATE_FIX);
+});
+
+test('update: up to date, and ahead of the newest tag, are behind false with no fix', () => {
+  const same = check({ home: fixtureHome, skipClaude: true, version: '0.2.5', latest: () => latestRelease({ run: okRun(lsRemote('v0.2.5')) }) });
+  assert.deepEqual(same.update, { installed: '0.2.5', latest: '0.2.5', behind: false, reason: 'up to date' });
+  assert.ok(!same.fixes.includes(UPDATE_FIX));
+  const ahead = check({ home: fixtureHome, skipClaude: true, version: '0.3.0', latest: () => latestRelease({ run: okRun(lsRemote('v0.2.5')) }) });
+  assert.equal(ahead.update.behind, false);
+  assert.match(ahead.update.reason, /newer than the latest release/);
+  assert.ok(!ahead.fixes.includes(UPDATE_FIX));
+});
+
+test('update: runner failure or no tags is behind null with a reason, and the check still works', () => {
+  const failing = check({ home: fixtureHome, skipClaude: true, version: '0.2.4', latest: () => latestRelease({ run: () => ({ code: null, stdout: '', stderr: 'offline' }) }) });
+  assert.equal(failing.update.behind, null);
+  assert.equal(failing.update.latest, null);
+  assert.match(failing.update.reason, /could not check for updates .*offline/);
+  assert.ok(!failing.fixes.includes(UPDATE_FIX));
+  const none = check({ home: fixtureHome, skipClaude: true, version: '0.2.4', latest: () => latestRelease({ run: okRun('') }) });
+  assert.equal(none.update.behind, null);
+  const throwing = check({ home: fixtureHome, skipClaude: true, version: '0.2.4', latest: () => { throw new Error('x'); } });
+  assert.equal(throwing.update.behind, null);
+  const unreadable = check({ home: fixtureHome, skipClaude: true, version: null, latest: () => ({ version: '0.2.5', reason: 'ok' }) });
+  assert.equal(unreadable.update.behind, null);
+});
+
+test('session start never asks for updates: no hook or shared lib mentions latestRelease or ls-remote', () => {
+  for (const dir of ['scripts/hooks', 'scripts/lib']) {
+    for (const name of readdirSync(path.join(root, dir))) {
+      const text = readFileSync(path.join(root, dir, name), 'utf8');
+      assert.doesNotMatch(text, /latestRelease|ls-remote|updateStatus/, `${dir}/${name}`);
+    }
+  }
+  const hook = readFileSync(path.join(root, 'scripts', 'hooks', 'session-start.mjs'), 'utf8');
+  assert.deepEqual([...hook.matchAll(/import \{([^}]*)\} from '\.\.\/setup\/check\.mjs'/g)].map((m) => m[1].trim()), ['superpowersStatus']);
+});
+
+test('setup skill reports the update line', () => {
+  const body = readFileSync(path.join(root, 'skills', 'setup', 'SKILL.md'), 'utf8');
+  for (const needle of ['update.behind', 'up to date', 'could not check', 'claude plugin marketplace update nauraiz-dev']) assert.ok(body.includes(needle), needle);
+});

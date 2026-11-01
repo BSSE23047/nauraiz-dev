@@ -89,7 +89,8 @@ test('init skill frontmatter', () => {
   assert.doesNotMatch(text.split('---\n').slice(2).join('---\n'), /Templates are in/);
   const body = text.split('---\n').slice(2).join('---\n');
   for (const needle of ['--local', '--print', '.claude/nauraiz-dev.local.json', '.claude/settings.local.json', 'exclude.mjs', 'sharedPaths', 'offeredGate', 'testOneShot',
-    'only the keys that differ from the tracked file', 'Never copy `protectedPaths`, `sharedPaths` or gate entries the tracked']) {
+    'only the keys that differ from the tracked file', 'Never copy `protectedPaths`, `sharedPaths` or gate entries the tracked',
+    "Suggest skills for this project's stack now? It needs network and never installs anything.", 'nauraiz-dev:find-skills', 'Run /nauraiz-dev:find-skills any time.', 'AskUserQuestion']) {
     assert.ok(body.includes(needle), `init skill must mention ${needle}`);
   }
   assert.ok(lines(text).length <= 110);

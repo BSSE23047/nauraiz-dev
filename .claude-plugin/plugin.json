@@ -1,6 +1,6 @@
 {
   "name": "nauraiz-dev",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "The way work gets done with Claude Code: triage, grounded questions, kickoff prompts, a gate that reads real results, memory that survives the session. Layers on superpowers.",
   "author": { "name": "Nauraiz Haider", "email": "bsse23047@itu.edu.pk" },
   "homepage": "https://github.com/BSSE23047/nauraiz-dev",

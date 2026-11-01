@@ -7,9 +7,8 @@ allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/init/detect.mjs" *) Bash
 
 # init
 
-Adopt nauraiz-dev in the current repo. Get each template's text with
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs" templates/<name>` (e.g. `templates/CLAUDE.md`).
-Never Read plugin files directly: the project's own hooks may deny reads outside the repo.
+Adopt nauraiz-dev in the current repo. Get each template's text with `node "${CLAUDE_PLUGIN_ROOT}/scripts/show.mjs"
+templates/<name>` (e.g. `templates/CLAUDE.md`). Never Read plugin files directly: project hooks may deny it.
 
 Three limits apply to every step:
 
@@ -20,8 +19,7 @@ Three limits apply to every step:
 
 ## Modes
 
-The mode comes from the arguments the user typed (`/nauraiz-dev:init --local`, `--print`);
-they can be combined, and with neither it is project mode.
+The mode comes from the arguments typed (`/nauraiz-dev:init --local`, `--print`); they combine, and with neither it is project mode.
 
 - `--local`: for a shared repo whose tracked files you must not change. Touch only
   `.claude/nauraiz-dev.local.json`, `.claude/settings.local.json` and git's exclude file
@@ -98,12 +96,15 @@ they can be combined, and with neither it is project mode.
    `.claude/knowledge/README.md`, `.claude/rules/README.md`, `.claude/state/session.md`,
    `.claude/state/backlog.md`, `.claude/state/completed.md`. For `none`, create none.
 
-6. If `existingPreToolUseHook` is true, set `"scopeAsk": false` and say why (the
-   project's own edit hook already asks; protected paths are still denied). Otherwise
-   leave `"scopeAsk": true`.
+6. If `existingPreToolUseHook` is true, set `"scopeAsk": false` and say why (the project's own
+   edit hook already asks; protected paths are still denied). Otherwise leave `"scopeAsk": true`.
 
-7. Print every file written, changed or left alone, and anything still to fill in by hand.
-   Next steps: commit these setup files on their own, through the base branch and before
-   any task branch (a task's scope check would count them), then start a new session.
-   In `--local` nothing needs committing: say so, that the files are excluded locally, and
-   that the gate reaches Claude through session start.
+7. Print every file written, changed or left alone, and anything still to fill in by hand. Next steps: commit
+   these setup files on their own, through the base branch and before any task branch (a task's scope check
+   would count them), then start a new session. In `--local` nothing needs committing: say so, that the files
+   are excluded locally, and that the gate reaches Claude through session start.
+
+8. Last, not in `--print` and not when `AskUserQuestion` is unavailable (headless): ask ONE yes/no question
+   with it: "Suggest skills for this project's stack now? It needs network and never installs anything."
+   Yes: invoke `/nauraiz-dev:find-skills` (Skill tool, skill `nauraiz-dev:find-skills`). No: say one line,
+   "Run /nauraiz-dev:find-skills any time."
