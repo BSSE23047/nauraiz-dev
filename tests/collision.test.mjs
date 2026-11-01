@@ -479,3 +479,30 @@ test('the result has remoteBranches on every path, including invalid input', asy
   const free = await n34({ gh: ghThree(), git: gitStub() });
   assert.deepEqual(free.remoteBranches, []);
 });
+
+test('ours but a branch could not be read: unknown, not ours', async () => {
+  const gh = ghThree({ all: [pr34({ author: { login: 'me-dev' }, closingIssuesReferences: [{ number: 34 }] })] });
+  const r = await n34({ gh, git: gitStub({ remote: 'a\trefs/heads/fix/34-x\n', fetch: bad('denied') }) });
+  assert.equal(r.verdict, 'unknown');
+  assert.match(r.reason, /your open PR #341/);
+  assert.match(r.reason, /fix\/34-x/);
+  const clean = await n34({ gh, git: gitStub() });
+  assert.equal(clean.verdict, 'ours', 'with nothing unverified it stays ours');
+});
+
+test('a remote branch named like an option is never passed to git fetch or log; the verdict is unknown', async () => {
+  const git = gitStub({ remote: 'a\trefs/heads/--upload-pack=x-34\nb\trefs/heads/fix/34-ok\n', log: '' });
+  const r = await n34({ gh: ghThree(), git });
+  assert.equal(git.calls.some((a) => a.some((x) => x.includes('upload-pack') && a[0] !== 'ls-remote')), false);
+  assert.deepEqual(git.calls.filter((a) => a[0] === 'fetch'), [['fetch', 'origin', 'fix/34-ok']], 'the ordinary branch is still read');
+  assert.equal(r.verdict, 'unknown');
+  assert.match(r.reason, /--upload-pack=x-34/);
+});
+
+test('an exact branch name starting with "-" (from --branch or the issue body) is not passed to git either', async () => {
+  const git = gitStub({ remote: 'a\trefs/heads/x\n' });
+  const r = await n34({ branch: '--upload-pack=evil', gh: ghThree(), git });
+  assert.equal(git.calls.length, 0);
+  assert.equal(r.remoteBranch.exists, null);
+  assert.equal(r.verdict, 'unknown');
+});

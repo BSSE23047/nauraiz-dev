@@ -196,6 +196,8 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
   const readAuthors = (name) => {
     const me2 = whoAmI();
     const out = { known: false, why: '', names: [], others: [], mine: false };
+    // A name that starts with "-" would be read by git as an option (--upload-pack=...): never pass it on.
+    if (name.startsWith('-')) return { ...out, why: 'the branch name starts with "-" and was not passed to git' };
     const fetched = attempt(runGit, ['fetch', 'origin', name]);
     if (!fetched.ok) return { ...out, why: `git fetch failed: ${fetched.why}` };
     const log = attempt(runGit, ['log', `origin/${name}`, '--not', `origin/${base}`, '--format=%an|%ae']);
@@ -217,7 +219,10 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
   // The exact branch (argument, issue body or pattern).
   let otherAuthors = [];
   let myCommits = false;
-  if (branchName) {
+  if (branchName && branchName.startsWith('-')) {
+    result.remoteBranch.exists = null;
+    notes.push(`could not check the remote branch (the name ${branchName} starts with "-" and was not passed to git)`);
+  } else if (branchName) {
     const ls = attempt(runGit, ['ls-remote', '--heads', 'origin', branchName]);
     if (!ls.ok) {
       result.remoteBranch.exists = null;
@@ -277,9 +282,13 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
   if (taken.length) {
     result.verdict = 'taken';
     result.reason = `taken: ${taken.join('; ')}${tail}`;
+  } else if (ours.length && notes.length) {
+    // mine, but a branch or list could not be read: someone else may hold part of it, so ask rather than go on.
+    result.verdict = 'unknown';
+    result.reason = `unknown: ${ours.join('; ')}, but ${notes.join('; ')}`;
   } else if (ours.length) {
     result.verdict = 'ours';
-    result.reason = `ours: ${ours.join('; ')}${tail}`;
+    result.reason = `ours: ${ours.join('; ')}`;
   } else if (notes.length) {
     // gh found no owner, but something unchecked (a branch, a cut-off list) may still hold someone's work: never "free".
     result.verdict = 'unknown';

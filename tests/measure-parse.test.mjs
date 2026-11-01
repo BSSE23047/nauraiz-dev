@@ -384,7 +384,7 @@ test('README and CHANGELOG explain the weighting; every version carrier says 0.2
   const manifest = (rel) => JSON.parse(readFileSync(path.join(root, rel), 'utf8'));
   const market = manifest('.claude-plugin/marketplace.json');
   for (const v of [manifest('package.json').version, market.version, market.metadata?.version, ...(market.plugins ?? []).map((p) => p.version)]) {
-    if (v !== undefined) assert.equal(v, '0.2.3');
+    if (v !== undefined) assert.equal(v, '0.2.4');
   }
   // the old raw-token default must not survive anywhere a user reads about the cap
   const docs = [readme, ...readdirSync(path.join(root, 'skills')).map((d) => path.join(root, 'skills', d, 'SKILL.md')).filter(existsSync).map((p) => readFileSync(p, 'utf8'))];
