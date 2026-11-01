@@ -1,6 +1,6 @@
 # nauraiz-dev
 
-A Claude Code plugin for the way work gets done: it checks who owns an issue, asks the owner what only the owner can answer before building, runs a gate that reads real exit codes, and keeps memory that survives the session. It layers on [superpowers](https://github.com/obra/superpowers). Version 0.2.3: five hooks, thirteen skills, two agents.
+A Claude Code plugin for the way work gets done: it checks who owns an issue, asks the owner what only the owner can answer before building, runs a gate that reads real exit codes, and keeps memory that survives the session. It layers on [superpowers](https://github.com/obra/superpowers). Version 0.2.4: five hooks, thirteen skills, two agents.
 
 ## Install
 
@@ -40,7 +40,7 @@ Thirteen. Skills that are not marked "you only" can also fire from a request or 
 
 | Skill | Use it to | Invoked by |
 | --- | --- | --- |
-| `/nauraiz-dev:start-task` | Start work on an issue or feature: check who owns it, check the base branch, size the task, ask what matters, route to the right process, plan, build, gate, report. Its pre-flight (issue, collision check, base check) is one call to `scripts/task/preflight.mjs`. | you, or Claude on the first substantive request |
+| `/nauraiz-dev:start-task` | Start work on an issue or feature: check who owns it, check the base branch, size the task, ask what matters, route to the right process, plan, build, gate, report. Its pre-flight (issue, collision check, base check) is one call to `scripts/task/preflight.mjs`. The collision check also looks at pull requests linked to the issue and at pull request and remote branch names that carry its number. | you, or Claude on the first substantive request |
 | `/nauraiz-dev:grill` | Ask the few questions that change what gets built: one round of at most three, each with a recommendation. | Claude, from `start-task`, or you |
 | `/nauraiz-dev:kickoff-prompt` | Turn an issue into a prompt for a fresh session: guard block, branch, files, decisions, gate, stops, model, budget. | you, or Claude when asked |
 | `/nauraiz-dev:gate` | Run the project's gate and report the real exit codes and last lines of output. | you, or Claude before a report or commit |
@@ -70,7 +70,7 @@ At most three questions in a round, each with a recommended answer and the cost 
 
 The reason, from the author's own use on a real project (observations, not measurements): in real runs, Claude built before asking, recorded approvals the owner had not given, and once duplicated a colleague's open pull request. So:
 
-- **Collision check.** Before work starts, `start-task` and `ship` look at who is assigned, who has an open PR that references the issue, and who pushed the branch. If it is someone else's, they stop and tell you who and where. If `gh` is missing, offline or not signed in, or the remote branch cannot be checked, the answer is "unknown", never "free", and you are asked.
+- **Collision check.** Before work starts, `start-task` and `ship` look at who is assigned, who has an open PR that references or is linked to the issue (or whose branch name carries its number), and who pushed the branch or any remote branch with the number in its name. If it is someone else's, they stop and tell you who and where. If `gh` is missing, offline or not signed in, or the remote branch cannot be checked, the answer is "unknown", never "free", and you are asked.
 - **Approvals.** An `*_approval` field in a plan is `pending owner confirmation` unless you said yes in this session; then it quotes the date and your words. A hook asks before an edit writes any other value into a plan.
 - **Base check.** It says how many commits the branch is behind `origin/<base>`, and the gate compares against `origin/<base>` when the local branch is stale.
 

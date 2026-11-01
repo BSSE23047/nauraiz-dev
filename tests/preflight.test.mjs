@@ -243,3 +243,16 @@ test('CLI: started in a subfolder it loads the config of the project root (branc
     assert.equal(none.status, 0, '--cwd without a value does not throw');
   } finally { rmSync(top, { recursive: true, force: true }); }
 });
+
+test('a linked PR and a branch-named remote branch pass through preflight unchanged (why, remoteBranches)', async () => {
+  const linked = { number: 56, author: { login: 'colleague' }, headRefName: 'unrelated', title: 'Quiet', body: '', closingIssuesReferences: [{ number: 27 }] };
+  const mk = () => ({
+    gh: ghStub({ prs: [linked] }),
+    git: gitStub({ remote: 'abc\trefs/heads/fix/27-y\n', log: 'Other Person|o@x.io\n' }),
+  });
+  const r = await run(mk());
+  assert.equal(r.collision.verdict, 'taken');
+  assert.deepEqual(r.collision.openPRs, [{ number: 56, author: 'colleague', head: 'unrelated', why: 'linked' }]);
+  assert.deepEqual(r.collision.remoteBranches, [{ name: 'fix/27-y', authors: ['Other Person'] }]);
+  assert.deepEqual(r.collision, await checkCollision({ issue: 27, cwd: here, config, ...mk() }));
+});

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.4 — 2026-11-01
+
+The ownership check now finds pull requests that never name the issue. Two real cases it reported as free: an open PR whose only link to the issue was GitHub's linked-issue field, and an open PR on a branch named `fix/<n>-...` whose title and body never contained `#<n>`.
+
+- collision check, open PRs: one more query, `gh pr list --state open --limit 200 --json number,author,headRefName,title,body,closingIssuesReferences`, next to the existing search and `--head` queries; the three are merged by PR number. A PR refers to the issue when its `closingIssuesReferences` has it (`why: "linked"`), its title or body has `#<n>` as a whole token (`mention`) or a URL ending `/issues/<n>` (`url`), it is the PR of the exact branch (`head`), or its head branch name carries `<n>` as a token (`branch`). `openPRs` entries are now `{number, author, head, why}`. Any query failing is still `unknown`. A full page of 200 open PRs with no match is `unknown`, because the list may be cut off.
+- collision check, remote branches: `git ls-remote --heads origin` is read once and every branch with `<n>` as a token is checked for its authors (at most 5, fetched one by one; more than 5 makes the verdict `unknown`). Another author's commits make it `taken`, only your own make it `ours`, unreadable authors or a failed listing make it `unknown`. They are reported in `remoteBranches: [{name, authors}]`; `remoteBranch` stays the one exact branch, which is not repeated there.
+- branch-name token rule: `<n>` must sit between `/ _ . -` or the ends of the name, so `fix/34-x`, `34-x`, `feature/34` and `bug_34_y` match for issue 34, and `fix/340-x`, `issue34` and dotted versions such as `release/1.34.0` or `34.2-x` do not. The rule leans towards matching: a false positive makes `start-task` ask the owner, a false negative would call someone else's work free.
+- `preflight.mjs` passes both through unchanged; `start-task` names each PR's number, author and `why`, and each branch and its authors, when it stops.
+
 ## 0.2.3 — 2026-11-01
 
 Less plugin overhead. A fair measure (sonnet, same quality) showed the plugin costing 50 turns against 35 without it; the extra turns were the start-task pre-flight (4 calls) and the gate (4 runs).

@@ -369,17 +369,17 @@ test('weightedTokens / rawTokens: integer arithmetic, cache reads at a tenth, ro
   assert.equal(weightedTokens(undefined), 0);
 });
 
-test('README and CHANGELOG explain the weighting; every version carrier says 0.2.3; no old 2,000,000 default is left', () => {
+test('README and CHANGELOG explain the weighting; every version carrier says 0.2.4; no old 2,000,000 default is left', () => {
   const root = path.join(here, '..');
   const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
-  assert.match(readme, /Version 0\.2\.3:/);
+  assert.match(readme, /Version 0\.2\.4:/);
   assert.ok(readme.includes('cache reads count 0.1'), 'README explains the weighting');
   assert.ok(readme.includes('1,500,000'));
   const changelog = readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, /^## 0\.2\.2 /m);
   assert.ok(changelog.includes('keeps the larger of'), 'the changelog says how the estimate is chosen');
   const plugin = JSON.parse(readFileSync(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8'));
-  assert.equal(plugin.version, '0.2.3');
+  assert.equal(plugin.version, '0.2.4');
   // every JSON manifest that carries a version (package.json and marketplace.json carry none today; if one gets one, it must match)
   const manifest = (rel) => JSON.parse(readFileSync(path.join(root, rel), 'utf8'));
   const market = manifest('.claude-plugin/marketplace.json');

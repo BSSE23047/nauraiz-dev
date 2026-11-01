@@ -37,9 +37,38 @@ function attempt(runner, args) {
   return { ok: true, stdout: String(r.stdout ?? ''), why: '' };
 }
 
+const MAX_LIST = 200; // the plain open-PR list; a full page may be cut off
+const MAX_OTHER_BRANCHES = 5; // token-matching remote branches whose authors are read
+
 const lower = (s) => String(s ?? '').trim().toLowerCase();
 const refersTo = (text, issue) => new RegExp(`(?<![\\w#])#${issue}(?!\\d)`).test(String(text ?? ''));
+const urlTo = (text, issue) => new RegExp(`/issues/${issue}\\b`).test(String(text ?? ''));
 const list = (items) => items.join(', ');
+const isDigit = (c) => c !== undefined && c >= '0' && c <= '9';
+const isSep = (c) => c === undefined || c === '' || '/_.-'.includes(c);
+
+/**
+ * Does branch name `branch` carry issue number `issue` as a whole token? The digits must sit between
+ * separators (`/ _ . -`) or the ends of the name: `fix/34-x`, `34-x`, `feature/34`, `bug_34_y` match;
+ * `fix/340-x` and `issue34` do not. A number that is part of a dotted version (`release/1.34.0`, `34.2-x`)
+ * is not a match. Where this is ambiguous it is meant to over-match (a false positive makes start-task
+ * ask the owner; a false negative would say "free" about work someone else started).
+ */
+export function branchHasIssue(branch, issue) {
+  const s = String(branch ?? '');
+  const num = String(issue);
+  for (let i = s.indexOf(num); i >= 0; i = s.indexOf(num, i + 1)) {
+    const end = i + num.length;
+    const prev = s[i - 1];
+    const next = s[end];
+    if (isDigit(prev) || isDigit(next)) continue;
+    if (!isSep(prev) || !isSep(next)) continue;
+    if (prev === '.' && isDigit(s[i - 2])) continue;
+    if (next === '.' && isDigit(s[end + 1])) continue;
+    return true;
+  }
+  return false;
+}
 
 function unknown(partial, command, why) {
   return { ...partial, verdict: 'unknown', reason: `unknown: \`${command}\` failed (${why}); cannot tell whether the issue is taken` };
@@ -59,6 +88,7 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
     otherAssignees: [],
     openPRs: [],
     remoteBranch: { name: null, exists: false, authors: [] },
+    remoteBranches: [],
     verdict: 'unknown',
     reason: '',
   };
@@ -97,39 +127,96 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
   result.remoteBranch.name = branchName;
 
   const PR_FIELDS = 'number,author,headRefName,title,body';
-  /** One `gh pr list` query -> { prs } or { fail }. */
-  const queryPRs = (extra, label) => {
-    const res = attempt(runGh, ['pr', 'list', '--state', 'open', ...extra, '--json', PR_FIELDS, '--limit', '100']);
+  /** One `gh pr list` query -> { prs } or { fail }. `tail` is everything after `--state open`. */
+  const queryPRs = (tail, label) => {
+    const res = attempt(runGh, ['pr', 'list', '--state', 'open', ...tail]);
     if (!res.ok) return { fail: unknown(result, label, res.why) };
     try {
       const data = JSON.parse(res.stdout);
       if (!Array.isArray(data)) throw new Error('not an array');
-      return { prs: data };
+      return { prs: data.filter((p) => p && typeof p === 'object') };
     } catch {
       return { fail: unknown(result, label, 'unparsable JSON') };
     }
   };
-  // Search does not cover head ref names, so a PR from the issue's branch is looked up by --head as well.
-  const searched = queryPRs(['--search', `${n} in:title,body`], 'gh pr list');
+  // Three views of the open PRs, merged by number. The plain list carries `closingIssuesReferences` (a PR
+  // linked to the issue need not name it anywhere) and head branch names; search finds #n mentions beyond the
+  // list's limit; --head finds a PR from the issue's own branch.
+  const listed = queryPRs(['--limit', String(MAX_LIST), '--json', `${PR_FIELDS},closingIssuesReferences`], 'gh pr list');
+  if (listed.fail) return listed.fail;
+  const searched = queryPRs(['--search', `${n} in:title,body`, '--json', PR_FIELDS, '--limit', '100'], 'gh pr list --search');
   if (searched.fail) return searched.fail;
-  const byHead = branchName ? queryPRs(['--head', branchName], 'gh pr list --head') : { prs: [] };
+  const byHead = branchName
+    ? queryPRs(['--head', branchName, '--json', PR_FIELDS, '--limit', '100'], 'gh pr list --head')
+    : { prs: [] };
   if (byHead.fail) return byHead.fail;
-  const found = new Map();
-  for (const p of searched.prs) {
-    if (refersTo(p.title, n) || refersTo(p.body, n) || (branchName && p.headRefName === branchName)) found.set(p.number, p);
+  const merged = new Map(); // number -> { pr, viaHead }
+  const merge = (prs, viaHead) => {
+    for (const p of prs) {
+      const prev = merged.get(p.number);
+      merged.set(p.number, { pr: { ...prev?.pr, ...p }, viaHead: viaHead || prev?.viaHead === true });
+    }
+  };
+  merge(listed.prs, false);
+  merge(searched.prs, false);
+  merge(byHead.prs, true);
+  /** Which rule ties this PR to issue n: linked | mention | url | head | branch, or null. */
+  const whyReferred = ({ pr: p, viaHead }) => {
+    const refs = Array.isArray(p.closingIssuesReferences) ? p.closingIssuesReferences : [];
+    if (refs.some((r) => Number(r !== null && typeof r === 'object' ? r.number : r) === n)) return 'linked';
+    if (refersTo(p.title, n) || refersTo(p.body, n)) return 'mention';
+    if (urlTo(p.title, n) || urlTo(p.body, n)) return 'url';
+    if (viaHead || (branchName && p.headRefName === branchName)) return 'head';
+    if (branchHasIssue(p.headRefName, n)) return 'branch';
+    return null;
+  };
+  for (const entry of merged.values()) {
+    const why = whyReferred(entry);
+    if (why) result.openPRs.push({ number: entry.pr.number, author: entry.pr.author?.login ?? null, head: entry.pr.headRefName ?? null, why });
   }
-  for (const p of byHead.prs) found.set(p.number, p);
-  result.openPRs = [...found.values()]
-    .map((p) => ({ number: p.number, author: p.author?.login ?? null, head: p.headRefName ?? null }));
   const theirPRs = result.openPRs.filter((p) => lower(p.author) !== lower(me));
   const myPRs = result.openPRs.filter((p) => lower(p.author) === lower(me));
-
-  // Remote branch: a git failure never overrides a taken or ours that gh established, but it turns
-  // "free" into "unknown" (the branch may hold someone's work).
   const notes = [];
+  // A full page may have been cut off: with no match in it, "no open PR" is not established.
+  const listCut = listed.prs.length >= MAX_LIST;
+  if (listCut) notes.push(`the open PR list is ${MAX_LIST} long and may be cut off, so PRs beyond it were not checked`);
+
+  // Remote branches: a git failure never overrides a taken or ours that gh established, but it turns
+  // "free" into "unknown" (a branch may hold someone's work). Every unverified thing adds a note.
+  let identity; // me as git knows me; read once, and only when a branch's authors have to be read
+  const whoAmI = () => {
+    if (!identity) {
+      const name = attempt(runGit, ['config', 'user.name']);
+      const email = attempt(runGit, ['config', 'user.email']);
+      identity = { name: lower(name.ok ? name.stdout : ''), email: lower(email.ok ? email.stdout : '') };
+    }
+    return identity;
+  };
+  /** Who committed to origin/<name> beyond origin/<base>: { known, why, names, others, mine }. */
+  const readAuthors = (name) => {
+    const me2 = whoAmI();
+    const out = { known: false, why: '', names: [], others: [], mine: false };
+    const fetched = attempt(runGit, ['fetch', 'origin', name]);
+    if (!fetched.ok) return { ...out, why: `git fetch failed: ${fetched.why}` };
+    const log = attempt(runGit, ['log', `origin/${name}`, '--not', `origin/${base}`, '--format=%an|%ae']);
+    if (!log.ok) return { ...out, why: `git log failed: ${log.why}` };
+    if (!me2.name && !me2.email) return { ...out, why: 'git user.name and user.email are not set' };
+    const names = new Set();
+    const others = new Set();
+    for (const line of log.stdout.split(/\r?\n/).filter(Boolean)) {
+      const cut = line.lastIndexOf('|');
+      const an = cut < 0 ? line : line.slice(0, cut);
+      const ae = cut < 0 ? '' : line.slice(cut + 1);
+      names.add(an);
+      if ((me2.name && lower(an) === me2.name) || (me2.email && lower(ae) === me2.email)) out.mine = true;
+      else others.add(an);
+    }
+    return { ...out, known: true, names: [...names], others: [...others] };
+  };
+
+  // The exact branch (argument, issue body or pattern).
   let otherAuthors = [];
   let myCommits = false;
-  let authorsKnown = true;
   if (branchName) {
     const ls = attempt(runGit, ['ls-remote', '--heads', 'origin', branchName]);
     if (!ls.ok) {
@@ -139,45 +226,52 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
       result.remoteBranch.exists = false;
     } else {
       result.remoteBranch.exists = true;
-      const name = attempt(runGit, ['config', 'user.name']);
-      const email = attempt(runGit, ['config', 'user.email']);
-      const myName = lower(name.ok ? name.stdout : '');
-      const myEmail = lower(email.ok ? email.stdout : '');
-      const fetched = attempt(runGit, ['fetch', 'origin', branchName]);
-      const log = fetched.ok ? attempt(runGit, ['log', `origin/${branchName}`, '--not', `origin/${base}`, '--format=%an|%ae']) : null;
-      if (!fetched.ok) {
-        authorsKnown = false;
-        notes.push(`could not read the authors of ${branchName} (git fetch failed: ${fetched.why})`);
-      } else if (!log.ok) {
-        authorsKnown = false;
-        notes.push(`could not read the authors of ${branchName} (git log failed: ${log.why})`);
-      } else if (!myName && !myEmail) {
-        authorsKnown = false;
-        notes.push(`could not read the authors of ${branchName} (git user.name and user.email are not set)`);
+      const a = readAuthors(branchName);
+      if (!a.known) {
+        notes.push(`could not read the authors of ${branchName} (${a.why})`);
       } else {
-        const names = new Set();
-        const others = new Set();
-        for (const line of log.stdout.split(/\r?\n/).filter(Boolean)) {
-          const cut = line.lastIndexOf('|');
-          const an = cut < 0 ? line : line.slice(0, cut);
-          const ae = cut < 0 ? '' : line.slice(cut + 1);
-          names.add(an);
-          if ((myName && lower(an) === myName) || (myEmail && lower(ae) === myEmail)) myCommits = true;
-          else others.add(an);
-        }
-        result.remoteBranch.authors = [...names];
-        otherAuthors = [...others];
+        result.remoteBranch.authors = a.names;
+        otherAuthors = a.others;
+        myCommits = a.mine;
       }
+    }
+  }
+
+  // Every other remote branch with the issue number in its name (someone may have pushed work under a
+  // name this plugin did not predict). One listing; at most MAX_OTHER_BRANCHES are read.
+  const branchTaken = []; // "remote branch X has commits by A, B"
+  const branchMine = [];
+  if (result.remoteBranch.exists !== null) { // the exact check already found git unreachable
+    const all = attempt(runGit, ['ls-remote', '--heads', 'origin']);
+    if (!all.ok) {
+      notes.push(`could not list the remote branches (git ls-remote --heads origin failed: ${all.why})`);
+    } else {
+      const names = [];
+      for (const line of all.stdout.split(/\r?\n/)) {
+        const m = /^\S+\s+refs\/heads\/(.+?)\s*$/.exec(line);
+        if (m && m[1] !== branchName && branchHasIssue(m[1], n) && !names.includes(m[1])) names.push(m[1]);
+      }
+      for (const name of names.slice(0, MAX_OTHER_BRANCHES)) {
+        const a = readAuthors(name);
+        result.remoteBranches.push({ name, authors: a.names });
+        if (!a.known) notes.push(`could not read the authors of ${name} (${a.why})`);
+        else if (a.others.length) branchTaken.push(`remote branch ${name} has commits by ${list(a.others)}`);
+        else if (a.mine) branchMine.push(`remote branch ${name} has your commits`);
+      }
+      const skipped = names.length - MAX_OTHER_BRANCHES;
+      if (skipped > 0) notes.push(`${skipped} more remote branches carry #${n} in their name and were not read`);
     }
   }
 
   const taken = [];
   if (result.otherAssignees.length) taken.push(`assigned to ${list(result.otherAssignees)}`);
-  if (theirPRs.length) taken.push(`open PR ${list(theirPRs.map((p) => `#${p.number} by ${p.author}`))}`);
+  if (theirPRs.length) taken.push(`open PR ${list(theirPRs.map((p) => `#${p.number} by ${p.author} (${p.why})`))}`);
   if (otherAuthors.length) taken.push(`remote branch ${branchName} has commits by ${list(otherAuthors)}`);
+  taken.push(...branchTaken);
   const ours = [];
-  if (myPRs.length) ours.push(`your open PR ${list(myPRs.map((p) => `#${p.number}`))}`);
+  if (myPRs.length) ours.push(`your open PR ${list(myPRs.map((p) => `#${p.number} (${p.why})`))}`);
   if (myCommits && !otherAuthors.length) ours.push(`remote branch ${branchName} has your commits`);
+  ours.push(...branchMine);
   const tail = notes.length ? `; ${notes.join('; ')}` : '';
 
   if (taken.length) {
@@ -186,17 +280,15 @@ export async function checkCollision({ issue, branch, cwd = process.cwd(), confi
   } else if (ours.length) {
     result.verdict = 'ours';
     result.reason = `ours: ${ours.join('; ')}${tail}`;
-  } else if (result.remoteBranch.exists === true && !authorsKnown) {
+  } else if (notes.length) {
+    // gh found no owner, but something unchecked (a branch, a cut-off list) may still hold someone's work: never "free".
     result.verdict = 'unknown';
-    result.reason = `unknown: remote branch ${branchName} exists but its authors are unverified${tail}`;
-  } else if (result.remoteBranch.exists === null) {
-    // gh found no owner, but an unchecked remote branch may still hold someone's work: never "free".
-    result.verdict = 'unknown';
-    result.reason = `unknown: no other assignee and no open PR, but ${notes.join('; ')}`;
+    result.reason = `unknown: no other assignee and no open PR found, but ${notes.join('; ')}`;
   } else {
     result.verdict = 'free';
     const seen = result.remoteBranch.exists === true ? `remote branch ${branchName} has no commits of its own` : 'no remote branch';
-    result.reason = `free: no other assignee, no open PR, ${seen}`;
+    const others = result.remoteBranches.length ? `, ${result.remoteBranches.length} other remote branch(es) with #${n} in the name have no commits of their own` : '';
+    result.reason = `free: no other assignee, no open PR, ${seen}${others}`;
   }
   return result;
 }
@@ -222,7 +314,7 @@ if (isMain(import.meta.url)) {
   } catch (e) {
     out = {
       me: null, assignees: [], otherAssignees: [], openPRs: [],
-      remoteBranch: { name: null, exists: false, authors: [] },
+      remoteBranch: { name: null, exists: false, authors: [] }, remoteBranches: [],
       verdict: 'unknown', reason: `unknown: collision check crashed (${e.message})`,
     };
   }

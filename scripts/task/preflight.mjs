@@ -118,7 +118,7 @@ export async function preflight({ issue, branch, cwd = process.cwd(), config, gh
   } catch (e) {
     collision = {
       me: null, assignees: [], otherAssignees: [], openPRs: [],
-      remoteBranch: { name: null, exists: false, authors: [] },
+      remoteBranch: { name: null, exists: false, authors: [] }, remoteBranches: [],
       verdict: 'unknown', reason: `unknown: collision check crashed (${e?.message ?? e})`,
     };
   }

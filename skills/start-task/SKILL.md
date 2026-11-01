@@ -41,8 +41,8 @@ Rules for every step:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/task/collision.mjs" <n>` with the same flags
    instead; if that prints no `verdict` either, treat it as `unknown`.
    - `taken`: **stop.** Tell the owner who and where: the `reason`, `otherAssignees`, each
-     `openPRs` number, author and head, and `remoteBranch` name and authors. Do nothing
-     more until the owner says to go on.
+     `openPRs` number, author and `why` (linked, mention, url, branch or head), and each
+     `remoteBranches` and `remoteBranch` name and authors. Nothing more until the owner says go on.
    - `unknown`: ask the owner whether to go on, quoting the `reason`. Wait.
    - `ours` or `free`: say the verdict in one line and go on.
 
